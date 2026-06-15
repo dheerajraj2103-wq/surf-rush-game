@@ -18,7 +18,7 @@ import { initTelegram, getTelegramUser, isInsideTelegram, shareScore } from './t
 
 type Screen = 'start' | 'playing' | 'gameover';
 
-const TELEGRAM_BOT_USERNAME = 'your_bot_username'; // update with your bot's @username
+const TELEGRAM_BOT_USERNAME = 'your_bot_username';
 
 function shortenAddress(address: string): string {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
@@ -32,6 +32,7 @@ function App() {
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [finalScore, setFinalScore] = useState(0);
   const [finalCoins, setFinalCoins] = useState(0);
+  const [isNewRecord, setIsNewRecord] = useState(false);
 
   const [wallet, setWallet] = useState<WalletState>({
     address: null,
@@ -40,11 +41,16 @@ function App() {
   });
   const [walletError, setWalletError] = useState<string | null>(null);
   const [txStatus, setTxStatus] = useState<string | null>(null);
+  const [txLoading, setTxLoading] = useState(false);
 
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [playerName, setPlayerName] = useState<string>('Player');
 
-  // Initialize Telegram SDK and pull a display name if available.
+  const [scoreAnim, setScoreAnim] = useState(false);
+  const [comboAnim, setComboAnim] = useState(false);
+  const prevCombo = useRef(1);
+  const prevScore = useRef(0);
+
   useEffect(() => {
     initTelegram();
     const tgUser = getTelegramUser();
@@ -54,7 +60,21 @@ function App() {
     setLeaderboard(getLeaderboard());
   }, []);
 
-  // Create the game engine once the canvas is mounted.
+  useEffect(() => {
+    if (gameState) {
+      if (gameState.score !== prevScore.current) {
+        prevScore.current = gameState.score;
+        setScoreAnim(true);
+        setTimeout(() => setScoreAnim(false), 300);
+      }
+      if (gameState.combo !== prevCombo.current) {
+        prevCombo.current = gameState.combo;
+        setComboAnim(true);
+        setTimeout(() => setComboAnim(false), 400);
+      }
+    }
+  }, [gameState]);
+
   useEffect(() => {
     if (!canvasRef.current) return;
 
@@ -63,7 +83,10 @@ function App() {
       onGameOver: (score, coins) => {
         setFinalScore(score);
         setFinalCoins(coins);
-        setScreen('gameover');
+
+        const prevLeaderboard = getLeaderboard();
+        const topScore = prevLeaderboard.length > 0 ? prevLeaderboard[0].score : 0;
+        setIsNewRecord(score > topScore);
 
         const updated = saveToLeaderboard({
           name: playerName,
@@ -72,14 +95,12 @@ function App() {
           date: new Date().toISOString()
         });
         setLeaderboard(updated);
+        setScreen('gameover');
       }
     });
 
     engineRef.current = engine;
-
-    return () => {
-      engine.stop();
-    };
+    return () => { engine.stop(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playerName]);
 
@@ -92,6 +113,7 @@ function App() {
   const restartGame = useCallback(() => {
     setScreen('playing');
     setTxStatus(null);
+    setTxLoading(false);
     engineRef.current?.restart();
   }, []);
 
@@ -99,7 +121,6 @@ function App() {
     engineRef.current?.togglePause();
   }, []);
 
-  // Keyboard controls
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (screen !== 'playing') return;
@@ -111,12 +132,10 @@ function App() {
         engineRef.current?.togglePause();
       }
     };
-
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [screen]);
 
-  // Touch / swipe controls
   useEffect(() => {
     const area = canvasRef.current?.parentElement;
     if (!area) return;
@@ -126,16 +145,12 @@ function App() {
     const onTouchStart = (e: TouchEvent) => {
       touchStartX = e.touches[0]?.clientX ?? 0;
     };
-
     const onTouchEnd = (e: TouchEvent) => {
       const endX = e.changedTouches[0]?.clientX ?? 0;
       const delta = endX - touchStartX;
       if (Math.abs(delta) < 30) return;
-      if (delta > 0) {
-        engineRef.current?.moveRight();
-      } else {
-        engineRef.current?.moveLeft();
-      }
+      if (delta > 0) engineRef.current?.moveRight();
+      else engineRef.current?.moveLeft();
     };
 
     area.addEventListener('touchstart', onTouchStart);
@@ -150,7 +165,7 @@ function App() {
   const handleConnectWallet = useCallback(async () => {
     setWalletError(null);
     if (!isMetaMaskAvailable()) {
-      setWalletError('MetaMask not found. Install it or open this app in a MetaMask-enabled browser.');
+      setWalletError('MetaMask not found. Install it or open in a MetaMask-enabled browser.');
       return;
     }
     try {
@@ -166,30 +181,30 @@ function App() {
   }, []);
 
   const handleSaveScoreOnChain = useCallback(async () => {
-    if (!wallet.signer) {
-      setWalletError('Connect your wallet first.');
-      return;
-    }
+    if (!wallet.signer) { setWalletError('Connect your wallet first.'); return; }
     try {
+      setTxLoading(true);
       setTxStatus('Saving score on-chain...');
       const hash = await saveScoreOnChain(wallet.signer, finalScore);
-      setTxStatus(`Score saved! Tx: ${shortenAddress(hash)}`);
+      setTxStatus(`✅ Score saved! Tx: ${shortenAddress(hash)}`);
     } catch (err) {
-      setTxStatus(err instanceof Error ? `Error: ${err.message}` : 'Transaction failed.');
+      setTxStatus(err instanceof Error ? `❌ ${err.message}` : '❌ Transaction failed.');
+    } finally {
+      setTxLoading(false);
     }
   }, [wallet.signer, finalScore]);
 
   const handleClaimReward = useCallback(async () => {
-    if (!wallet.signer) {
-      setWalletError('Connect your wallet first.');
-      return;
-    }
+    if (!wallet.signer) { setWalletError('Connect your wallet first.'); return; }
     try {
-      setTxStatus('Claiming reward...');
+      setTxLoading(true);
+      setTxStatus('Claiming daily reward...');
       const hash = await claimRewardOnChain(wallet.signer);
-      setTxStatus(`Reward claimed! Tx: ${shortenAddress(hash)}`);
+      setTxStatus(`✅ Reward claimed! Tx: ${shortenAddress(hash)}`);
     } catch (err) {
-      setTxStatus(err instanceof Error ? `Error: ${err.message}` : 'Claim failed.');
+      setTxStatus(err instanceof Error ? `❌ ${err.message}` : '❌ Claim failed.');
+    } finally {
+      setTxLoading(false);
     }
   }, [wallet.signer]);
 
@@ -197,108 +212,226 @@ function App() {
     shareScore(finalScore, TELEGRAM_BOT_USERNAME);
   }, [finalScore]);
 
+  const activeEffects = gameState ? [
+    gameState.hasShield && { icon: '🛡️', label: 'Shield', color: '#06b6d4' },
+    Date.now() < gameState.magnetUntil && { icon: '🧲', label: 'Magnet', color: '#f97316' },
+    Date.now() < gameState.speedBoostUntil && { icon: '⚡', label: 'Boost', color: '#10b981' },
+    Date.now() < gameState.freezeUntil && { icon: '❄️', label: 'Frozen', color: '#60a5fa' },
+    Date.now() < gameState.slowUntil && { icon: '🌀', label: 'Slow', color: '#0d9488' },
+  ].filter(Boolean) : [];
+
   return (
     <div className="app">
+      {/* ── Top Bar ── */}
       <div className="topbar">
-        <div className="title">🌊 SURF RUSH WEB3</div>
-        {wallet.address ? (
-          <button className="wallet-btn" onClick={handleDisconnectWallet}>
-            {shortenAddress(wallet.address)}
-          </button>
-        ) : (
-          <button className="wallet-btn" onClick={handleConnectWallet}>
-            Connect Wallet
-          </button>
-        )}
+        <div className="brand">
+          <span className="brand-icon">🌊</span>
+          <div className="brand-text">
+            <span className="brand-title">SURF RUSH</span>
+            <span className="brand-sub">WEB3</span>
+          </div>
+        </div>
+
+        <div className="topbar-right">
+          {walletError && (
+            <div className="wallet-error-inline">{walletError}</div>
+          )}
+          {wallet.address ? (
+            <button className="wallet-btn connected" onClick={handleDisconnectWallet}>
+              <span className="wallet-dot" />
+              {shortenAddress(wallet.address)}
+            </button>
+          ) : (
+            <button className="wallet-btn" onClick={handleConnectWallet}>
+              <span className="wallet-icon">◈</span> Connect
+            </button>
+          )}
+        </div>
       </div>
 
-      {walletError && <div className="error-text">{walletError}</div>}
-
-      {gameState && (
+      {/* ── HUD ── */}
+      {screen === 'playing' && gameState && (
         <div className="hud">
-          <span>Score: {gameState.score}</span>
-          <span>Coins: {gameState.coins}</span>
-          <span>Combo: x{gameState.combo}</span>
+          <div className={`hud-card ${scoreAnim ? 'hud-pop' : ''}`}>
+            <span className="hud-label">SCORE</span>
+            <span className="hud-value score-val">{gameState.score.toLocaleString()}</span>
+          </div>
+          <div className="hud-card">
+            <span className="hud-label">COINS</span>
+            <span className="hud-value coin-val">🪙 {gameState.coins}</span>
+          </div>
+          <div className={`hud-card ${comboAnim ? 'hud-pop' : ''} ${gameState.combo > 3 ? 'hud-hot' : ''}`}>
+            <span className="hud-label">COMBO</span>
+            <span className="hud-value combo-val">x{gameState.combo}</span>
+          </div>
         </div>
       )}
 
+      {/* Active power-up badges */}
+      {screen === 'playing' && activeEffects.length > 0 && (
+        <div className="powerup-bar">
+          {(activeEffects as { icon: string; label: string; color: string }[]).map((fx) => (
+            <div className="powerup-badge" key={fx.label} style={{ borderColor: fx.color, boxShadow: `0 0 10px ${fx.color}55` }}>
+              <span>{fx.icon}</span>
+              <span style={{ color: fx.color }}>{fx.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Game Canvas Area ── */}
       <div className="game-area">
         <canvas ref={canvasRef} />
 
+        {/* Start Screen */}
         {screen === 'start' && (
-          <div className="overlay">
-            <h1>Surf Rush</h1>
-            <p>Move left/right to dodge obstacles and collect mystery boxes.</p>
-            <p>
-              {isInsideTelegram()
-                ? 'Use the on-screen arrows or swipe to move.'
-                : 'Use Arrow Keys / A & D to move, Space to pause.'}
-            </p>
-            <button className="primary-btn" onClick={startGame}>
-              Start Game
-            </button>
+          <div className="overlay start-overlay">
+            <div className="start-content">
+              <div className="start-logo">
+                <div className="start-waves">🌊🌊🌊</div>
+                <h1 className="start-title">SURF RUSH</h1>
+                <div className="start-badge">WEB3 EDITION</div>
+              </div>
+
+              <p className="start-desc">
+                Ride the waves. Dodge obstacles.<br />
+                Collect rewards. Earn on-chain.
+              </p>
+
+              <div className="feature-chips">
+                <div className="chip">⚡ Power-ups</div>
+                <div className="chip">🛡️ Shields</div>
+                <div className="chip">🔗 On-chain</div>
+                <div className="chip">🏆 Leaderboard</div>
+              </div>
+
+              <div className="controls-hint">
+                {isInsideTelegram()
+                  ? '👆 Swipe left/right to surf'
+                  : '⬅ ➡ Arrow keys or A/D to move · Space to pause'}
+              </div>
+
+              <button className="play-btn" onClick={startGame}>
+                <span className="play-btn-icon">▶</span>
+                <span>START SURFING</span>
+              </button>
+            </div>
           </div>
         )}
 
+        {/* Game Over Screen */}
         {screen === 'gameover' && (
-          <div className="overlay">
-            <h1>Game Over</h1>
-            <p>Score: {finalScore}</p>
-            <p>Coins: {finalCoins}</p>
+          <div className="overlay gameover-overlay">
+            <div className="gameover-modal">
+              {isNewRecord && (
+                <div className="new-record-banner">🏆 NEW RECORD!</div>
+              )}
 
-            <button className="primary-btn" onClick={restartGame}>
-              Play Again
-            </button>
+              <h2 className="gameover-title">WIPEOUT!</h2>
 
-            <button className="secondary-btn" onClick={handleShareScore}>
-              Share Score on Telegram
-            </button>
+              <div className="score-card">
+                <div className="score-card-row">
+                  <span className="sc-label">Final Score</span>
+                  <span className="sc-value score-highlight">{finalScore.toLocaleString()}</span>
+                </div>
+                <div className="score-card-divider" />
+                <div className="score-card-row">
+                  <span className="sc-label">🪙 Coins</span>
+                  <span className="sc-value">{finalCoins}</span>
+                </div>
+              </div>
 
-            {wallet.address ? (
-              <>
-                <button className="secondary-btn" onClick={handleSaveScoreOnChain}>
-                  Save Score On-Chain
+              <div className="gameover-actions">
+                <button className="action-btn primary-action" onClick={restartGame}>
+                  ↺ Play Again
                 </button>
-                <button className="secondary-btn" onClick={handleClaimReward}>
-                  Claim Daily Reward
-                </button>
-              </>
-            ) : (
-              <button className="secondary-btn" onClick={handleConnectWallet}>
-                Connect Wallet to Save Score
-              </button>
-            )}
 
-            {txStatus && <p className="status-text">{txStatus}</p>}
+                <button className="action-btn telegram-action" onClick={handleShareScore}>
+                  <span>📲</span> Share on Telegram
+                </button>
+
+                {wallet.address ? (
+                  <div className="chain-actions">
+                    <button
+                      className="action-btn chain-action"
+                      onClick={handleSaveScoreOnChain}
+                      disabled={txLoading}
+                    >
+                      {txLoading ? <span className="spinner" /> : '⛓️'} Save Score On-Chain
+                    </button>
+                    <button
+                      className="action-btn chain-action"
+                      onClick={handleClaimReward}
+                      disabled={txLoading}
+                    >
+                      {txLoading ? <span className="spinner" /> : '🎁'} Claim Daily Reward
+                    </button>
+                  </div>
+                ) : (
+                  <button className="action-btn wallet-action" onClick={handleConnectWallet}>
+                    ◈ Connect Wallet to Save Score
+                  </button>
+                )}
+              </div>
+
+              {txStatus && (
+                <div className={`tx-status ${txStatus.startsWith('✅') ? 'tx-success' : txStatus.startsWith('❌') ? 'tx-error' : 'tx-pending'}`}>
+                  {txStatus}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
 
+      {/* ── Mobile Controls ── */}
       {screen === 'playing' && (
         <div className="controls">
-          <button onClick={() => engineRef.current?.moveLeft()}>◀</button>
-          <button onClick={togglePause}>
+          <button className="ctrl-btn" onPointerDown={() => engineRef.current?.moveLeft()}>
+            <span>◀</span>
+          </button>
+          <button className="ctrl-btn pause-btn" onPointerDown={togglePause}>
             {gameState?.isPaused ? '▶' : '⏸'}
           </button>
-          <button onClick={() => engineRef.current?.moveRight()}>▶</button>
+          <button className="ctrl-btn" onPointerDown={() => engineRef.current?.moveRight()}>
+            <span>▶</span>
+          </button>
         </div>
       )}
 
+      {/* ── Leaderboard ── */}
       <div className="leaderboard">
-        <h3>Local Leaderboard</h3>
+        <div className="lb-header">
+          <span className="lb-icon">🏆</span>
+          <h3 className="lb-title">LEADERBOARD</h3>
+        </div>
+
         {leaderboard.length === 0 ? (
-          <p className="status-text">No scores yet. Play a round!</p>
+          <div className="lb-empty">
+            <p>No scores yet.</p>
+            <p>Play your first round to appear here!</p>
+          </div>
         ) : (
-          <ol>
+          <div className="lb-list">
             {leaderboard.map((entry, idx) => (
-              <li key={`${entry.date}-${idx}`}>
-                <span>
-                  {idx + 1}. {entry.name}
-                </span>
-                <span>{entry.score} pts</span>
-              </li>
+              <div
+                key={`${entry.date}-${idx}`}
+                className={`lb-row ${idx === 0 ? 'lb-first' : idx === 1 ? 'lb-second' : idx === 2 ? 'lb-third' : ''}`}
+              >
+                <div className="lb-rank">
+                  {idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `#${idx + 1}`}
+                </div>
+                <div className="lb-info">
+                  <span className="lb-name">{entry.name}</span>
+                  <span className="lb-date">{new Date(entry.date).toLocaleDateString()}</span>
+                </div>
+                <div className="lb-scores">
+                  <span className="lb-score">{entry.score.toLocaleString()}</span>
+                  <span className="lb-coins">🪙 {entry.coins}</span>
+                </div>
+              </div>
             ))}
-          </ol>
+          </div>
         )}
       </div>
     </div>
