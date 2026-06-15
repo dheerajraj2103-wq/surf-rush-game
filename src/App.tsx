@@ -51,6 +51,50 @@ function App() {
   const prevCombo = useRef(1);
   const prevScore = useRef(0);
 
+  // Rules modal
+  const [showRules, setShowRules] = useState(false);
+
+  // Daily reward system (frontend cooldown with localStorage)
+  const [lastClaimTime, setLastClaimTime] = useState<number | null>(null);
+  const [timeUntilNextClaim, setTimeUntilNextClaim] = useState<string>('');
+
+  const loadLastClaim = useCallback(() => {
+    const saved = localStorage.getItem('surfRushLastClaim');
+    if (saved) {
+      setLastClaimTime(parseInt(saved));
+    }
+  }, []);
+
+  const updateTimeUntilClaim = useCallback(() => {
+    if (!lastClaimTime) {
+      setTimeUntilNextClaim('Ready now!');
+      return;
+    }
+    const now = Date.now();
+    const cooldown = 24 * 60 * 60 * 1000; // 24 hours
+    const nextClaim = lastClaimTime + cooldown;
+    if (now >= nextClaim) {
+      setTimeUntilNextClaim('Ready now!');
+    } else {
+      const remaining = nextClaim - now;
+      const hours = Math.floor(remaining / (1000 * 60 * 60));
+      const minutes = Math.floor((remaining % (1000 * 60 * 60)) / (1000 * 60));
+      setTimeUntilNextClaim(`${hours}h ${minutes}m`);
+    }
+  }, [lastClaimTime]);
+
+  useEffect(() => {
+    loadLastClaim();
+  }, [loadLastClaim]);
+
+  useEffect(() => {
+    const interval = setInterval(updateTimeUntilClaim, 30000); // update every 30s
+    updateTimeUntilClaim();
+    return () => clearInterval(interval);
+  }, [updateTimeUntilClaim]);
+
+  const canClaimReward = !lastClaimTime || Date.now() - lastClaimTime >= 24 * 60 * 60 * 1000;
+
   useEffect(() => {
     initTelegram();
     const tgUser = getTelegramUser();
@@ -195,18 +239,31 @@ function App() {
   }, [wallet.signer, finalScore]);
 
   const handleClaimReward = useCallback(async () => {
-    if (!wallet.signer) { setWalletError('Connect your wallet first.'); return; }
+    if (!wallet.signer) { 
+      setWalletError('Connect your wallet first.'); 
+      return; 
+    }
+    if (!canClaimReward) {
+      setTxStatus('❌ Daily reward already claimed. Try again later.');
+      return;
+    }
     try {
       setTxLoading(true);
       setTxStatus('Claiming daily reward...');
       const hash = await claimRewardOnChain(wallet.signer);
-      setTxStatus(`✅ Reward claimed! Tx: ${shortenAddress(hash)}`);
+      
+      // Update local cooldown
+      const now = Date.now();
+      localStorage.setItem('surfRushLastClaim', now.toString());
+      setLastClaimTime(now);
+      
+      setTxStatus(`✅ Daily reward claimed! +500 coins. Tx: ${shortenAddress(hash)}`);
     } catch (err) {
       setTxStatus(err instanceof Error ? `❌ ${err.message}` : '❌ Claim failed.');
     } finally {
       setTxLoading(false);
     }
-  }, [wallet.signer]);
+  }, [wallet.signer, canClaimReward]);
 
   const handleShareScore = useCallback(() => {
     shareScore(finalScore, TELEGRAM_BOT_USERNAME);
@@ -233,6 +290,10 @@ function App() {
         </div>
 
         <div className="topbar-right">
+          <button className="rules-btn" onClick={() => setShowRules(true)}>
+            📜 Rules
+          </button>
+          
           {walletError && (
             <div className="wallet-error-inline">{walletError}</div>
           )}
@@ -294,15 +355,15 @@ function App() {
               </div>
 
               <p className="start-desc">
-                Ride the waves. Dodge obstacles.<br />
-                Collect rewards. Earn on-chain.
+                Ride the endless waves.<br />
+                Master the surf. Claim your glory.
               </p>
 
               <div className="feature-chips">
-                <div className="chip">⚡ Power-ups</div>
-                <div className="chip">🛡️ Shields</div>
-                <div className="chip">🔗 On-chain</div>
-                <div className="chip">🏆 Leaderboard</div>
+                <div className="chip">🏄‍♂️ Surfboard</div>
+                <div className="chip">🪨 Rocks & Sharks</div>
+                <div className="chip">🛡️ Power-ups</div>
+                <div className="chip">⛓️ On-Chain</div>
               </div>
 
               <div className="controls-hint">
@@ -312,8 +373,12 @@ function App() {
               </div>
 
               <button className="play-btn" onClick={startGame}>
-                <span className="play-btn-icon">▶</span>
+                <span className="play-btn-icon">🌊</span>
                 <span>START SURFING</span>
+              </button>
+
+              <button className="secondary-btn" onClick={() => setShowRules(true)}>
+                📜 How to Play
               </button>
             </div>
           </div>
@@ -336,14 +401,30 @@ function App() {
                 </div>
                 <div className="score-card-divider" />
                 <div className="score-card-row">
-                  <span className="sc-label">🪙 Coins</span>
+                  <span className="sc-label">🪙 Coins Collected</span>
                   <span className="sc-value">{finalCoins}</span>
                 </div>
               </div>
 
+              {/* Daily Reward Section */}
+              <div className="daily-reward-card">
+                <div className="dr-header">
+                  <span>🎁 Daily Reward</span>
+                  <span className="dr-timer">{timeUntilNextClaim}</span>
+                </div>
+                <p className="dr-desc">Claim 500 bonus coins once every 24 hours</p>
+                <button 
+                  className="action-btn chain-action dr-claim"
+                  onClick={handleClaimReward}
+                  disabled={txLoading || !canClaimReward}
+                >
+                  {txLoading ? <span className="spinner" /> : 'Claim Daily Reward'}
+                </button>
+              </div>
+
               <div className="gameover-actions">
                 <button className="action-btn primary-action" onClick={restartGame}>
-                  ↺ Play Again
+                  ↺ Surf Again
                 </button>
 
                 <button className="action-btn telegram-action" onClick={handleShareScore}>
@@ -358,13 +439,6 @@ function App() {
                       disabled={txLoading}
                     >
                       {txLoading ? <span className="spinner" /> : '⛓️'} Save Score On-Chain
-                    </button>
-                    <button
-                      className="action-btn chain-action"
-                      onClick={handleClaimReward}
-                      disabled={txLoading}
-                    >
-                      {txLoading ? <span className="spinner" /> : '🎁'} Claim Daily Reward
                     </button>
                   </div>
                 ) : (
@@ -409,7 +483,7 @@ function App() {
         {leaderboard.length === 0 ? (
           <div className="lb-empty">
             <p>No scores yet.</p>
-            <p>Play your first round to appear here!</p>
+            <p>Ride the waves and claim your spot!</p>
           </div>
         ) : (
           <div className="lb-list">
@@ -434,6 +508,73 @@ function App() {
           </div>
         )}
       </div>
+
+      {/* Rules Modal */}
+      {showRules && (
+        <div className="modal-overlay" onClick={() => setShowRules(false)}>
+          <div className="rules-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>SURF RUSH WEB3</h2>
+              <button className="modal-close" onClick={() => setShowRules(false)}>✕</button>
+            </div>
+            
+            <div className="modal-content">
+              <section>
+                <h3>🎯 Objective</h3>
+                <ul>
+                  <li>Surf as long as possible on the endless ocean</li>
+                  <li>Avoid deadly obstacles like rocks and sharks</li>
+                  <li>Collect coins and power-ups</li>
+                  <li>Achieve the highest score</li>
+                  <li>Save your score on-chain for immortality</li>
+                </ul>
+              </section>
+
+              <section>
+                <h3>🎮 Controls</h3>
+                <ul>
+                  <li><strong>Desktop:</strong> Arrow keys or A/D to move left/right</li>
+                  <li><strong>Mobile:</strong> Swipe left/right or use on-screen buttons</li>
+                  <li>Space or P to pause</li>
+                </ul>
+              </section>
+
+              <section>
+                <h3>🏆 Scoring</h3>
+                <ul>
+                  <li>Distance survived contributes to score</li>
+                  <li>Coins multiply your rewards</li>
+                  <li>Combos increase score multiplier</li>
+                  <li>Power-ups give temporary advantages</li>
+                </ul>
+              </section>
+
+              <section>
+                <h3>✨ Rewards & Power-ups</h3>
+                <ul>
+                  <li>🪙 Coins - Collect for points</li>
+                  <li>🛡️ Shield - Temporary protection</li>
+                  <li>🧲 Magnet - Attract nearby coins</li>
+                  <li>⚡ Speed Boost - Temporary speed increase</li>
+                </ul>
+              </section>
+
+              <section>
+                <h3>⛓️ Blockchain Features</h3>
+                <ul>
+                  <li>Connect MetaMask wallet</li>
+                  <li>Save high scores permanently on-chain</li>
+                  <li>Claim daily rewards (500 bonus coins every 24h)</li>
+                </ul>
+              </section>
+
+              <div className="modal-footer">
+                <p>Master the waves. Become a legend.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
