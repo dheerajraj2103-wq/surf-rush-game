@@ -51,18 +51,16 @@ function App() {
   const prevCombo = useRef(1);
   const prevScore = useRef(0);
 
-  // Rules modal
   const [showRules, setShowRules] = useState(false);
 
-  // Daily reward cooldown
+  // Daily reward
   const [lastClaimTime, setLastClaimTime] = useState<number | null>(null);
   const [timeUntilNextClaim, setTimeUntilNextClaim] = useState('Ready now!');
 
   const loadLastClaim = useCallback(() => {
     const saved = localStorage.getItem('surfRushLastClaim');
     if (saved) {
-      const time = parseInt(saved);
-      setLastClaimTime(time);
+      setLastClaimTime(parseInt(saved));
     }
   }, []);
 
@@ -73,14 +71,14 @@ function App() {
     }
     const now = Date.now();
     const cooldown = 24 * 60 * 60 * 1000;
-    const next = lastClaimTime + cooldown;
-    if (now >= next) {
+    const nextClaim = lastClaimTime + cooldown;
+    if (now >= nextClaim) {
       setTimeUntilNextClaim('Ready now!');
     } else {
-      const rem = next - now;
-      const h = Math.floor(rem / (3600000));
-      const m = Math.floor((rem % 3600000) / 60000);
-      setTimeUntilNextClaim(`${h}h ${m}m`);
+      const remaining = nextClaim - now;
+      const hours = Math.floor(remaining / (1000 * 60 * 60));
+      const minutes = Math.floor((remaining % (1000 * 60 * 60)) / (1000 * 60));
+      setTimeUntilNextClaim(`${hours}h ${minutes}m`);
     }
   }, [lastClaimTime]);
 
@@ -94,7 +92,7 @@ function App() {
     return () => clearInterval(interval);
   }, [updateTimeUntilClaim]);
 
-  const canClaim = !lastClaimTime || Date.now() - lastClaimTime >= 24 * 60 * 60 * 1000;
+  const canClaimReward = !lastClaimTime || Date.now() - lastClaimTime >= 24 * 60 * 60 * 1000;
 
   useEffect(() => {
     initTelegram();
@@ -236,8 +234,8 @@ function App() {
       setTxStatus('Saving score on-chain...');
       const hash = await saveScoreOnChain(wallet.signer, finalScore);
       setTxStatus(`✅ Score saved successfully! Tx: ${shortenAddress(hash)}`);
-    } catch (err) {
-      setTxStatus(err instanceof Error ? `❌ ${err.message}` : '❌ Transaction failed.');
+    } catch (err: any) {
+      setTxStatus(`❌ ${err.message || 'Transaction failed.'}`);
     } finally {
       setTxLoading(false);
     }
@@ -248,26 +246,32 @@ function App() {
       setWalletError('Connect your wallet first.');
       return;
     }
-    if (!canClaim) {
-      setTxStatus('❌ Daily reward cooldown active. Please wait.');
+    if (!canClaimReward) {
+      setTxStatus('❌ Daily reward already claimed. Wait for cooldown.');
       return;
     }
+
     try {
       setTxLoading(true);
-      setTxStatus('Claiming daily reward...');
+      setTxStatus('Waiting for wallet approval... Approve the transaction in MetaMask.');
+
       const hash = await claimRewardOnChain(wallet.signer);
       
       const now = Date.now();
       localStorage.setItem('surfRushLastClaim', now.toString());
       setLastClaimTime(now);
-      
-      setTxStatus(`✅ Daily reward claimed! Tx: ${shortenAddress(hash)}`);
-    } catch (err) {
-      setTxStatus(err instanceof Error ? `❌ ${err.message}` : '❌ Claim failed.');
+
+      setTxStatus(`✅ Reward claimed successfully! Tx: ${shortenAddress(hash)}`);
+    } catch (err: any) {
+      if (err.code === 4001 || err.message?.includes('User denied') || err.message?.includes('rejected')) {
+        setTxStatus('❌ Transaction cancelled.');
+      } else {
+        setTxStatus(`❌ Transaction failed. Please try again.`);
+      }
     } finally {
       setTxLoading(false);
     }
-  }, [wallet.signer, canClaim]);
+  }, [wallet.signer, canClaimReward]);
 
   const handleShareScore = useCallback(() => {
     shareScore(finalScore, TELEGRAM_BOT_USERNAME);
@@ -295,7 +299,7 @@ function App() {
 
         <div className="topbar-right">
           <button className="rules-btn" onClick={() => setShowRules(true)}>
-            📜 Rules
+            📜 How to Play
           </button>
           {walletError && <div className="wallet-error-inline">{walletError}</div>}
           {wallet.address ? (
@@ -304,7 +308,7 @@ function App() {
             </button>
           ) : (
             <button className="wallet-btn" onClick={handleConnectWallet}>
-              <span className="wallet-icon">◈</span> Connect
+              <span className="wallet-icon">◈</span> Connect Wallet
             </button>
           )}
         </div>
@@ -330,8 +334,8 @@ function App() {
 
       {screen === 'playing' && activeEffects.length > 0 && (
         <div className="powerup-bar">
-          {(activeEffects as any[]).map((fx) => (
-            <div className="powerup-badge" key={fx.label} style={{ borderColor: fx.color, boxShadow: `0 0 10px ${fx.color}55` }}>
+          {(activeEffects as { icon: string; label: string; color: string }[]).map((fx) => (
+            <div className="powerup-badge" key={fx.label} style={{ borderColor: fx.color }}>
               <span>{fx.icon}</span>
               <span style={{ color: fx.color }}>{fx.label}</span>
             </div>
@@ -339,7 +343,6 @@ function App() {
         </div>
       )}
 
-      {/* Game Area */}
       <div className="game-area">
         <canvas ref={canvasRef} />
 
@@ -352,22 +355,13 @@ function App() {
                 <h1 className="start-title">SURF RUSH</h1>
                 <div className="start-badge">WEB3 EDITION</div>
               </div>
-              <p className="start-desc">
-                Ride the waves. Dodge obstacles.<br />
-                Collect rewards. Earn on-chain.
-              </p>
+              <p className="start-desc">Ride the waves. Dodge obstacles.<br />Collect rewards. Earn on-chain.</p>
               <div className="feature-chips">
-                <div className="chip">⚡ Power-ups</div>
-                <div className="chip">🛡️ Shields</div>
-                <div className="chip">🔗 On-chain</div>
-                <div className="chip">🏆 Leaderboard</div>
+                <div className="chip">🏄‍♂️ Surf</div>
+                <div className="chip">🛡️ Power-ups</div>
+                <div className="chip">⛓️ On-chain</div>
               </div>
-              <div className="controls-hint">
-                {isInsideTelegram() ? '👆 Swipe left/right' : 'Arrow keys / A D • Space to pause'}
-              </div>
-              <button className="play-btn" onClick={startGame}>
-                <span className="play-btn-icon">▶</span> START SURFING
-              </button>
+              <button className="play-btn" onClick={startGame}>START SURFING</button>
             </div>
           </div>
         )}
@@ -381,27 +375,26 @@ function App() {
 
               <div className="score-card">
                 <div className="score-card-row">
-                  <span className="sc-label">Final Score</span>
+                  <span className="sc-label">FINAL SCORE</span>
                   <span className="sc-value score-highlight">{finalScore.toLocaleString()}</span>
                 </div>
                 <div className="score-card-divider" />
                 <div className="score-card-row">
-                  <span className="sc-label">🪙 Coins</span>
+                  <span className="sc-label">COINS COLLECTED</span>
                   <span className="sc-value">{finalCoins}</span>
                 </div>
               </div>
 
-              {/* Daily Reward */}
               <div className="daily-reward-card">
                 <div className="dr-header">
-                  <span>🎁 Daily Reward</span>
+                  <span>🎁 DAILY REWARD</span>
                   <span className="dr-timer">{timeUntilNextClaim}</span>
                 </div>
-                <p className="dr-desc">+500 coins • One claim every 24 hours</p>
+                <p className="dr-desc">+500 coins • Once every 24 hours</p>
                 <button
                   className="action-btn chain-action"
                   onClick={handleClaimReward}
-                  disabled={txLoading || !canClaim}
+                  disabled={txLoading || !canClaimReward}
                 >
                   {txLoading ? <span className="spinner" /> : 'Claim Daily Reward'}
                 </button>
@@ -416,7 +409,7 @@ function App() {
                 </button>
                 {wallet.address ? (
                   <button
-                    className="action-btn chain-action save-btn"
+                    className="action-btn chain-action"
                     onClick={handleSaveScoreOnChain}
                     disabled={txLoading}
                   >
@@ -424,7 +417,7 @@ function App() {
                   </button>
                 ) : (
                   <button className="action-btn wallet-action" onClick={handleConnectWallet}>
-                    ◈ Connect Wallet
+                    ◈ Connect Wallet to Save
                   </button>
                 )}
               </div>
@@ -457,22 +450,19 @@ function App() {
           <h3 className="lb-title">LEADERBOARD</h3>
         </div>
         {leaderboard.length === 0 ? (
-          <div className="lb-empty">
-            No scores yet. Ride the waves!
-          </div>
+          <div className="lb-empty">Play to appear on the leaderboard!</div>
         ) : (
           <div className="lb-list">
             {leaderboard.map((entry, idx) => (
-              <div key={`${entry.date}-${idx}`} className={`lb-row ${idx < 3 ? `lb-top-${idx}` : ''}`}>
-                <div className="lb-rank">
-                  {idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `#${idx + 1}`}
-                </div>
+              <div key={`${entry.date}-${idx}`} className={`lb-row ${idx === 0 ? 'lb-first' : idx === 1 ? 'lb-second' : idx === 2 ? 'lb-third' : ''}`}>
+                <div className="lb-rank">{idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `#${idx+1}`}</div>
                 <div className="lb-info">
                   <span className="lb-name">{entry.name}</span>
+                  <span className="lb-date">{new Date(entry.date).toLocaleDateString()}</span>
                 </div>
                 <div className="lb-scores">
                   <span className="lb-score">{entry.score.toLocaleString()}</span>
-                  <span className="lb-date">{new Date(entry.date).toLocaleDateString()}</span>
+                  <span className="lb-coins">🪙 {entry.coins}</span>
                 </div>
               </div>
             ))}
@@ -485,36 +475,66 @@ function App() {
         <div className="modal-overlay" onClick={() => setShowRules(false)}>
           <div className="rules-modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>SURF RUSH WEB3</h2>
+              <h2>SURF RUSH WEB3 - HOW TO PLAY</h2>
               <button className="modal-close" onClick={() => setShowRules(false)}>✕</button>
             </div>
             <div className="modal-content">
               <section>
-                <h3>Objective</h3>
+                <h3>🎯 Objective</h3>
                 <ul>
-                  <li>Surf as long as possible</li>
-                  <li>Avoid obstacles</li>
-                  <li>Collect coins &amp; power-ups</li>
-                  <li>Save your best score on-chain</li>
+                  <li>Survive as long as possible on the endless ocean</li>
+                  <li>Avoid obstacles such as rocks, sharks, jellyfish and waves</li>
+                  <li>Collect coins and power-ups</li>
+                  <li>Achieve the highest score</li>
+                  <li>Save your score on-chain</li>
                 </ul>
               </section>
+
               <section>
-                <h3>Controls</h3>
+                <h3>🎮 Controls</h3>
                 <ul>
-                  <li>Left/Right arrows or A/D</li>
-                  <li>Swipe on mobile</li>
-                  <li>Space to pause</li>
+                  <li>Desktop: Left/Right arrows or A/D keys</li>
+                  <li>Mobile: Swipe left/right or on-screen buttons</li>
+                  <li>Space / P to pause</li>
+                  <li>Move into the correct lane to avoid obstacles and collect rewards</li>
                 </ul>
               </section>
+
               <section>
-                <h3>Daily Reward</h3>
-                <p>Claim 500 bonus coins once every 24 hours per wallet.</p>
-              </section>
-              <section>
-                <h3>Blockchain</h3>
+                <h3>🪙 How to Collect Coins</h3>
                 <ul>
-                  <li>Connect MetaMask</li>
-                  <li>Save score permanently</li>
+                  <li>Coins appear in different lanes</li>
+                  <li>Move the surfboard into the same lane as the coin</li>
+                  <li>Collection is automatic on contact</li>
+                  <li>Coins increase score and reward value</li>
+                </ul>
+              </section>
+
+              <section>
+                <h3>✨ Power-Ups</h3>
+                <ul>
+                  <li>🛡️ Shield — protects from one collision</li>
+                  <li>🧲 Magnet — attracts nearby coins</li>
+                  <li>⚡ Speed Boost — temporary speed increase</li>
+                  <li>Combo multiplier for higher scores</li>
+                </ul>
+              </section>
+
+              <section>
+                <h3>🎁 Daily Rewards</h3>
+                <ul>
+                  <li>Connect wallet first</li>
+                  <li>Claim once every 24 hours</li>
+                  <li>Approve transaction in MetaMask</li>
+                  <li>Reward processed on blockchain</li>
+                </ul>
+              </section>
+
+              <section>
+                <h3>⛓️ Blockchain Features</h3>
+                <ul>
+                  <li>Connect MetaMask wallet</li>
+                  <li>Save high scores permanently on-chain</li>
                   <li>Claim daily rewards</li>
                 </ul>
               </section>
