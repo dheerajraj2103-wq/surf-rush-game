@@ -200,7 +200,7 @@ function App() {
   return (
     <div className="app">
       <div className="topbar">
-        <div className="title">🏄 Surf Rush</div>
+        <div className="title">🌊 SURF RUSH WEB3</div>
         {wallet.address ? (
           <button className="wallet-btn" onClick={handleDisconnectWallet}>
             {shortenAddress(wallet.address)}
