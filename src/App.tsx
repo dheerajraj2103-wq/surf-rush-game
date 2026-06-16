@@ -828,7 +828,7 @@ function App() {
       <div
         className="game-area"
         ref={gameAreaRef}
-        style={{ minHeight: screen === 'playing' ? '55vh' : '520px' }}
+        style={{ minHeight: screen === 'playing' ? '55vh' : undefined }}
       >
         <canvas
           ref={initEngine}
