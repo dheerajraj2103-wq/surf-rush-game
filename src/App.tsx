@@ -24,7 +24,7 @@ function shortenAddress(address: string): string {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
-// ─── Wallet Panel ────────────────────────────────────────────────────────────
+// ─── Wallet Panel ─────────────────────────────────────────────────────────────
 interface WalletPanelProps {
   address: string;
   onDisconnect: () => void;
@@ -56,7 +56,7 @@ function WalletPanel({ address, onDisconnect, onCopy, copyFeedback }: WalletPane
   );
 }
 
-// ─── HUD ─────────────────────────────────────────────────────────────────────
+// ─── HUD ──────────────────────────────────────────────────────────────────────
 interface HudProps {
   gameState: GameState;
   scoreAnim: boolean;
@@ -82,7 +82,7 @@ function Hud({ gameState, scoreAnim, comboAnim }: HudProps) {
   );
 }
 
-// ─── Start Overlay ───────────────────────────────────────────────────────────
+// ─── Start Overlay ────────────────────────────────────────────────────────────
 interface StartOverlayProps {
   onStart: () => void;
 }
@@ -131,7 +131,7 @@ function StartOverlay({ onStart }: StartOverlayProps) {
   );
 }
 
-// ─── Game Over Overlay ───────────────────────────────────────────────────────
+// ─── Game Over Overlay ────────────────────────────────────────────────────────
 interface GameOverOverlayProps {
   finalScore: number;
   finalCoins: number;
@@ -140,7 +140,8 @@ interface GameOverOverlayProps {
   canClaimReward: boolean;
   txLoading: boolean;
   txStatus: string | null;
-  hasWallet: boolean;
+  // Pass the full wallet state so handlers are never stale
+  wallet: WalletState;
   onRestart: () => void;
   onShare: () => void;
   onSaveOnChain: () => void;
@@ -156,7 +157,7 @@ function GameOverOverlay({
   canClaimReward,
   txLoading,
   txStatus,
-  hasWallet,
+  wallet,
   onRestart,
   onShare,
   onSaveOnChain,
@@ -164,8 +165,9 @@ function GameOverOverlay({
   onClaimReward,
 }: GameOverOverlayProps) {
   return (
-    <div className="overlay gameover-overlay">
-      <div className="gameover-modal">
+    // pointer-events: all ensures clicks are never swallowed by the canvas below
+    <div className="overlay gameover-overlay" style={{ pointerEvents: 'all' }}>
+      <div className="gameover-modal" onClick={(e) => e.stopPropagation()}>
         {isNewRecord && <div className="new-record-banner">🏆 NEW RECORD!</div>}
 
         <div className="gameover-header">
@@ -185,20 +187,38 @@ function GameOverOverlay({
           </div>
         </div>
 
+        {/* Daily reward — shows prompt to connect wallet if not connected */}
         <div className="daily-reward-card">
           <div className="dr-header">
             <span>🎁 Daily Reward</span>
             <span className="dr-timer">{timeUntilNextClaim}</span>
           </div>
           <p className="dr-desc">+500 coins · Claimable once every 24 hours</p>
-          <button
-            className="action-btn chain-action"
-            style={{ marginTop: '8px' }}
-            onClick={onClaimReward}
-            disabled={txLoading || !canClaimReward}
-          >
-            {txLoading ? <span className="spinner" /> : '🎁 Claim Daily Reward'}
-          </button>
+
+          {wallet.signer ? (
+            <button
+              className="action-btn chain-action"
+              style={{ marginTop: '8px' }}
+              onClick={onClaimReward}
+              disabled={txLoading || !canClaimReward}
+            >
+              {txLoading
+                ? <span className="spinner" />
+                : canClaimReward
+                  ? '🎁 Claim Daily Reward'
+                  : `⏳ Next claim in ${timeUntilNextClaim}`}
+            </button>
+          ) : (
+            // Wallet not connected — show inline connect prompt instead of silently failing
+            <button
+              className="action-btn wallet-action"
+              style={{ marginTop: '8px' }}
+              onClick={onConnectWallet}
+              disabled={txLoading}
+            >
+              {txLoading ? <span className="spinner" /> : '◈ Connect Wallet to Claim'}
+            </button>
+          )}
         </div>
 
         <div className="gameover-actions">
@@ -210,7 +230,7 @@ function GameOverOverlay({
             📲 Share on Telegram
           </button>
 
-          {hasWallet ? (
+          {wallet.signer ? (
             <button
               className="action-btn chain-action"
               onClick={onSaveOnChain}
@@ -219,8 +239,12 @@ function GameOverOverlay({
               {txLoading ? <span className="spinner" /> : '⛓️ Save Score On-Chain'}
             </button>
           ) : (
-            <button className="action-btn wallet-action" onClick={onConnectWallet}>
-              ◈ Connect Wallet to Save Score
+            <button
+              className="action-btn wallet-action"
+              onClick={onConnectWallet}
+              disabled={txLoading}
+            >
+              {txLoading ? <span className="spinner" /> : '◈ Connect Wallet to Save Score'}
             </button>
           )}
         </div>
@@ -235,7 +259,7 @@ function GameOverOverlay({
   );
 }
 
-// ─── Leaderboard ─────────────────────────────────────────────────────────────
+// ─── Leaderboard ──────────────────────────────────────────────────────────────
 interface LeaderboardProps {
   entries: LeaderboardEntry[];
 }
@@ -284,7 +308,7 @@ function Leaderboard({ entries }: LeaderboardProps) {
   );
 }
 
-// ─── Rules Modal ─────────────────────────────────────────────────────────────
+// ─── Rules Modal ──────────────────────────────────────────────────────────────
 interface RulesModalProps {
   onClose: () => void;
 }
@@ -419,27 +443,38 @@ function RulesModal({ onClose }: RulesModalProps) {
   );
 }
 
-// ─── App ─────────────────────────────────────────────────────────────────────
+// ─── App ──────────────────────────────────────────────────────────────────────
 function App() {
   // Refs
-  const canvasRef      = useRef<HTMLCanvasElement | null>(null);
-  const gameAreaRef    = useRef<HTMLDivElement | null>(null);
-  const engineRef      = useRef<GameEngine | null>(null);
-  const playerNameRef  = useRef<string>('Player');
+  const canvasRef     = useRef<HTMLCanvasElement | null>(null);
+  const gameAreaRef   = useRef<HTMLDivElement | null>(null);
+  const engineRef     = useRef<GameEngine | null>(null);
+  const playerNameRef = useRef<string>('Player');
+
+  // Keep a ref to wallet so async callbacks always read the latest value
+  // without needing wallet in their useCallback dep arrays (which would
+  // recreate the handlers and cause stale-closure issues in GameOverOverlay).
+  const walletRef = useRef<WalletState>({ address: null, provider: null, signer: null });
 
   // Screens & game state
-  const [screen, setScreen]         = useState<Screen>('start');
-  const [gameState, setGameState]   = useState<GameState | null>(null);
-  const [finalScore, setFinalScore] = useState(0);
-  const [finalCoins, setFinalCoins] = useState(0);
+  const [screen, setScreen]           = useState<Screen>('start');
+  const [gameState, setGameState]     = useState<GameState | null>(null);
+  const [finalScore, setFinalScore]   = useState(0);
+  const [finalCoins, setFinalCoins]   = useState(0);
   const [isNewRecord, setIsNewRecord] = useState(false);
 
-  // Wallet
-  const [wallet, setWallet]           = useState<WalletState>({ address: null, provider: null, signer: null });
-  const [walletError, setWalletError] = useState<string | null>(null);
-  const [txStatus, setTxStatus]       = useState<string | null>(null);
-  const [txLoading, setTxLoading]     = useState(false);
+  // Wallet — kept in both state (for rendering) and ref (for async handlers)
+  const [wallet, setWalletState]       = useState<WalletState>({ address: null, provider: null, signer: null });
+  const [walletError, setWalletError]  = useState<string | null>(null);
+  const [txStatus, setTxStatus]        = useState<string | null>(null);
+  const [txLoading, setTxLoading]      = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(false);
+
+  /** Sets wallet in both state and ref so async handlers are never stale. */
+  const setWallet = useCallback((w: WalletState) => {
+    walletRef.current = w;
+    setWalletState(w);
+  }, []);
 
   // Leaderboard / player
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
@@ -458,7 +493,7 @@ function App() {
   const [lastClaimTime, setLastClaimTime]           = useState<number | null>(null);
   const [timeUntilNextClaim, setTimeUntilNextClaim] = useState('Ready now!');
 
-  // ── Daily reward timer ────────────────────────────────────────────────────
+  // ── Daily reward timer ─────────────────────────────────────────────────────
   useEffect(() => {
     const saved = localStorage.getItem('surfRushLastClaim');
     if (saved) setLastClaimTime(parseInt(saved, 10));
@@ -480,7 +515,7 @@ function App() {
 
   const canClaimReward = !lastClaimTime || Date.now() - lastClaimTime >= 24 * 60 * 60 * 1000;
 
-  // ── Telegram + leaderboard init ───────────────────────────────────────────
+  // ── Telegram + leaderboard init ────────────────────────────────────────────
   useEffect(() => {
     initTelegram();
     const tgUser = getTelegramUser();
@@ -492,13 +527,11 @@ function App() {
     setLeaderboard(getLeaderboard());
   }, []);
 
-  // Keep the ref in sync so the onGameOver closure always has the latest name
-  // without needing to rebuild the engine.
   useEffect(() => {
     playerNameRef.current = playerName;
   }, [playerName]);
 
-  // ── HUD animations ────────────────────────────────────────────────────────
+  // ── HUD animations ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!gameState) return;
     if (gameState.score !== prevScore.current) {
@@ -513,13 +546,8 @@ function App() {
     }
   }, [gameState]);
 
-  // ── Engine creation — runs once after the canvas is mounted ───────────────
-  // The key fix: we wait for the canvas to be in the DOM via a callback ref so
-  // that clientWidth/clientHeight are non-zero when the engine first calls
-  // resize(). We never rebuild the engine on playerName changes — instead we
-  // read playerNameRef.current inside the onGameOver closure.
+  // ── Engine creation ────────────────────────────────────────────────────────
   const initEngine = useCallback((canvas: HTMLCanvasElement | null) => {
-    // Called with null when the canvas unmounts — clean up.
     if (!canvas) {
       engineRef.current?.stop();
       engineRef.current = null;
@@ -528,8 +556,6 @@ function App() {
     }
 
     canvasRef.current = canvas;
-
-    // Destroy any previous engine (e.g. HMR / strict-mode double-invoke).
     engineRef.current?.stop();
 
     const engine = new GameEngine(canvas, {
@@ -538,8 +564,8 @@ function App() {
         setFinalScore(score);
         setFinalCoins(coins);
 
-        const prev   = getLeaderboard();
-        const top    = prev.length > 0 ? prev[0].score : 0;
+        const prev = getLeaderboard();
+        const top  = prev.length > 0 ? prev[0].score : 0;
         setIsNewRecord(score > top);
 
         const updated = saveToLeaderboard({
@@ -554,27 +580,23 @@ function App() {
     });
 
     engineRef.current = engine;
-  }, []); // stable — no deps needed
+  }, []);
 
-  // ── Keyboard controls ─────────────────────────────────────────────────────
+  // ── Keyboard controls ──────────────────────────────────────────────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // Prevent space from scrolling the page during play
       if (e.key === ' ') e.preventDefault();
-
-      // Use functional read of screen via a ref to avoid stale closures
       const eng = engineRef.current;
       if (!eng) return;
-
-      if (e.key === 'ArrowLeft'  || e.key.toLowerCase() === 'a') eng.moveLeft();
+      if      (e.key === 'ArrowLeft'  || e.key.toLowerCase() === 'a') eng.moveLeft();
       else if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') eng.moveRight();
-      else if (e.key === ' '     || e.key.toLowerCase() === 'p') eng.togglePause();
+      else if (e.key === ' '          || e.key.toLowerCase() === 'p') eng.togglePause();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, []); // no deps — engine is read from ref
+  }, []);
 
-  // ── Touch controls ────────────────────────────────────────────────────────
+  // ── Touch controls ─────────────────────────────────────────────────────────
   useEffect(() => {
     const area = gameAreaRef.current;
     if (!area) return;
@@ -594,9 +616,9 @@ function App() {
       area.removeEventListener('touchstart', onTouchStart);
       area.removeEventListener('touchend',   onTouchEnd);
     };
-  }, []); // gameAreaRef is stable
+  }, []);
 
-  // ── Game actions ──────────────────────────────────────────────────────────
+  // ── Game actions ───────────────────────────────────────────────────────────
   const startGame = useCallback(() => {
     setScreen('playing');
     setTxStatus(null);
@@ -615,53 +637,100 @@ function App() {
     engineRef.current?.togglePause();
   }, []);
 
-  // ── Wallet actions ────────────────────────────────────────────────────────
+  // ── Wallet actions ─────────────────────────────────────────────────────────
+  // FIX: handleConnectWallet now also clears txStatus so the game-over modal
+  // feedback area is reset, and sets a success txStatus when connection works
+  // so the user gets visible in-modal confirmation.
   const handleConnectWallet = useCallback(async () => {
     setWalletError(null);
+    setTxStatus(null);
+
     if (!isMetaMaskAvailable()) {
-      setWalletError('MetaMask not found. Install it or open in a MetaMask browser.');
+      const msg = 'MetaMask not found. Install MetaMask or open in a MetaMask-enabled browser.';
+      setWalletError(msg);
+      setTxStatus(`❌ ${msg}`);
       return;
     }
-    try {
-      setWallet(await connectWallet());
-    } catch (err) {
-      setWalletError(err instanceof Error ? err.message : 'Failed to connect wallet.');
-    }
-  }, []);
 
-  const handleDisconnectWallet = useCallback(() => {
-    setWallet(disconnectWallet());
-  }, []);
-
-  const handleCopyAddress = useCallback(() => {
-    if (!wallet.address) return;
-    navigator.clipboard.writeText(wallet.address).then(() => {
-      setCopyFeedback(true);
-      setTimeout(() => setCopyFeedback(false), 2000);
-    });
-  }, [wallet.address]);
-
-  const handleSaveScoreOnChain = useCallback(async () => {
-    if (!wallet.signer) { setWalletError('Connect your wallet first.'); return; }
     try {
       setTxLoading(true);
-      setTxStatus('Saving score on-chain...');
-      const hash = await saveScoreOnChain(wallet.signer, finalScore);
-      setTxStatus(`✅ Score saved! Tx: ${shortenAddress(hash)}`);
-    } catch (err: any) {
-      setTxStatus(`❌ ${err.message || 'Transaction failed.'}`);
+      setTxStatus('Connecting wallet…');
+      const connected = await connectWallet();
+      setWallet(connected);
+      setTxStatus(`✅ Wallet connected: ${shortenAddress(connected.address!)}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to connect wallet.';
+      setWalletError(msg);
+      setTxStatus(`❌ ${msg}`);
     } finally {
       setTxLoading(false);
     }
-  }, [wallet.signer, finalScore]);
+  }, [setWallet]);
 
-  const handleClaimReward = useCallback(async () => {
-    if (!wallet.signer) { setWalletError('Connect your wallet first.'); return; }
-    if (!canClaimReward) { setTxStatus('❌ Reward already claimed. Wait for cooldown.'); return; }
+  const handleDisconnectWallet = useCallback(() => {
+    setWallet(disconnectWallet());
+    setTxStatus(null);
+    setWalletError(null);
+  }, [setWallet]);
+
+  const handleCopyAddress = useCallback(() => {
+    if (!walletRef.current.address) return;
+    navigator.clipboard.writeText(walletRef.current.address).then(() => {
+      setCopyFeedback(true);
+      setTimeout(() => setCopyFeedback(false), 2000);
+    });
+  }, []);
+
+  // FIX: reads signer from walletRef.current (always latest) instead of
+  // closing over wallet.signer at hook-creation time. This means the handler
+  // works immediately after connectWallet() resolves, even though the
+  // GameOverOverlay received the handler before the wallet was connected.
+  const handleSaveScoreOnChain = useCallback(async () => {
+    const signer = walletRef.current.signer;
+    if (!signer) {
+      setTxStatus('❌ Connect your wallet first, then save your score.');
+      return;
+    }
     try {
       setTxLoading(true);
-      setTxStatus('Waiting for wallet approval...');
-      const hash = await claimRewardOnChain(wallet.signer);
+      setTxStatus('Saving score on-chain… approve in MetaMask.');
+      const hash = await saveScoreOnChain(signer, finalScore);
+      setTxStatus(`✅ Score saved! Tx: ${shortenAddress(hash)}`);
+    } catch (err: any) {
+      if (err.code === 4001 || err.message?.includes('rejected') || err.message?.includes('denied')) {
+        setTxStatus('❌ Transaction cancelled.');
+      } else {
+        setTxStatus(`❌ ${err.message || 'Transaction failed.'}`);
+      }
+    } finally {
+      setTxLoading(false);
+    }
+  }, [finalScore]); // finalScore is the only value not in a ref
+
+  // FIX: same pattern — reads signer from walletRef so it's never stale.
+  // Also uses a ref for canClaimReward so it doesn't need to be a dep.
+  const canClaimRewardRef = useRef(canClaimReward);
+  useEffect(() => { canClaimRewardRef.current = canClaimReward; }, [canClaimReward]);
+
+  const handleClaimReward = useCallback(async () => {
+    const signer = walletRef.current.signer;
+
+    if (!signer) {
+      // User clicked "Claim Daily Reward" without a wallet connected.
+      // Show clear in-modal feedback instead of silently failing.
+      setTxStatus('❌ Connect your wallet first, then claim your reward.');
+      return;
+    }
+
+    if (!canClaimRewardRef.current) {
+      setTxStatus('❌ Daily reward already claimed. Check back in 24 hours.');
+      return;
+    }
+
+    try {
+      setTxLoading(true);
+      setTxStatus('Waiting for wallet approval… approve in MetaMask.');
+      const hash = await claimRewardOnChain(signer);
       const now  = Date.now();
       localStorage.setItem('surfRushLastClaim', String(now));
       setLastClaimTime(now);
@@ -675,28 +744,28 @@ function App() {
     } finally {
       setTxLoading(false);
     }
-  }, [wallet.signer, canClaimReward]);
+  }, []); // no deps — reads everything from refs
 
   const handleShareScore = useCallback(() => {
     shareScore(finalScore, TELEGRAM_BOT_USERNAME);
   }, [finalScore]);
 
-  // ── Active power-up effects ───────────────────────────────────────────────
+  // ── Active power-up effects ────────────────────────────────────────────────
   const activeEffects = gameState
     ? ([
-        gameState.hasShield                        && { icon: '🛡️', label: 'Shield', color: '#06b6d4' },
-        Date.now() < gameState.magnetUntil         && { icon: '🧲', label: 'Magnet', color: '#f97316' },
-        Date.now() < gameState.speedBoostUntil     && { icon: '⚡', label: 'Boost',  color: '#10b981' },
-        Date.now() < gameState.freezeUntil         && { icon: '❄️', label: 'Frozen', color: '#60a5fa' },
-        Date.now() < gameState.slowUntil           && { icon: '🌀', label: 'Slow',   color: '#0d9488' },
+        gameState.hasShield                    && { icon: '🛡️', label: 'Shield', color: '#06b6d4' },
+        Date.now() < gameState.magnetUntil     && { icon: '🧲', label: 'Magnet', color: '#f97316' },
+        Date.now() < gameState.speedBoostUntil && { icon: '⚡', label: 'Boost',  color: '#10b981' },
+        Date.now() < gameState.freezeUntil     && { icon: '❄️', label: 'Frozen', color: '#60a5fa' },
+        Date.now() < gameState.slowUntil       && { icon: '🌀', label: 'Slow',   color: '#0d9488' },
       ] as (false | { icon: string; label: string; color: string })[]).filter(Boolean)
     : [];
 
-  // ─────────────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────────────
   return (
     <div className="app">
 
-      {/* ── Top Bar ── */}
+      {/* Top Bar */}
       <div className="topbar">
         <div className="brand">
           <span className="brand-icon">🌊</span>
@@ -728,7 +797,7 @@ function App() {
         </div>
       </div>
 
-      {/* ── Wallet Panel (shown when connected) ── */}
+      {/* Wallet Panel */}
       {wallet.address && (
         <WalletPanel
           address={wallet.address}
@@ -738,12 +807,12 @@ function App() {
         />
       )}
 
-      {/* ── HUD (during play) ── */}
+      {/* HUD */}
       {screen === 'playing' && gameState && (
         <Hud gameState={gameState} scoreAnim={scoreAnim} comboAnim={comboAnim} />
       )}
 
-      {/* ── Power-up bar ── */}
+      {/* Power-up bar */}
       {screen === 'playing' && activeEffects.length > 0 && (
         <div className="powerup-bar">
           {(activeEffects as { icon: string; label: string; color: string }[]).map((fx) => (
@@ -755,21 +824,12 @@ function App() {
         </div>
       )}
 
-      {/* ── Game area — canvas lives here at all times ── */}
+      {/* Game area */}
       <div
         className="game-area"
         ref={gameAreaRef}
-        style={{
-          // Ensure the container always has a real height so the canvas can
-          // measure itself correctly via clientHeight on first resize.
-          minHeight: screen === 'playing' ? '55vh' : '520px',
-        }}
+        style={{ minHeight: screen === 'playing' ? '55vh' : '520px' }}
       >
-        {/*
-          The canvas uses a callback ref (initEngine) instead of the plain
-          canvasRef so we can construct the engine the moment the DOM node
-          exists and has layout dimensions, avoiding the 0×0 blank-canvas bug.
-        */}
         <canvas
           ref={initEngine}
           style={{ display: 'block', width: '100%', height: '100%' }}
@@ -786,7 +846,7 @@ function App() {
             canClaimReward={canClaimReward}
             txLoading={txLoading}
             txStatus={txStatus}
-            hasWallet={!!wallet.address}
+            wallet={wallet}
             onRestart={restartGame}
             onShare={handleShareScore}
             onSaveOnChain={handleSaveScoreOnChain}
@@ -796,7 +856,7 @@ function App() {
         )}
       </div>
 
-      {/* ── Mobile controls ── */}
+      {/* Mobile controls */}
       {screen === 'playing' && (
         <div className="controls">
           <button className="ctrl-btn" onPointerDown={() => engineRef.current?.moveLeft()}>◀</button>
@@ -807,10 +867,10 @@ function App() {
         </div>
       )}
 
-      {/* ── Leaderboard ── */}
+      {/* Leaderboard */}
       <Leaderboard entries={leaderboard} />
 
-      {/* ── Rules modal ── */}
+      {/* Rules modal */}
       {showRules && <RulesModal onClose={() => setShowRules(false)} />}
 
     </div>
