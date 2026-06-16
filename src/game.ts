@@ -286,9 +286,11 @@ export class GameEngine {
     const rawH = parent ? parent.clientHeight : 640;
 
     this.width     = Math.max(280, Math.min(rawW, 480));
-    // If the parent has no height yet (e.g. min-height via CSS hasn't painted),
-    // use a safe fallback so we never set canvas.height = 0.
-    this.height    = rawH > 10 ? Math.max(480, rawH) : 640;
+    // Use parent height directly; only fall back to 640 when the parent hasn't
+    // painted yet (rawH ≤ 10). Do NOT enforce a minimum of 480 here — doing so
+    // would prevent the container from shrinking on the game-over screen and
+    // would create a large empty dark region above the modal.
+    this.height    = rawH > 10 ? rawH : 640;
     this.laneWidth = this.width / LANE_COUNT;
 
     this.canvas.width  = this.width;

@@ -826,9 +826,8 @@ function App() {
 
       {/* Game area */}
       <div
-        className="game-area"
+        className={`game-area${screen === 'gameover' ? ' game-area--gameover' : ''}`}
         ref={gameAreaRef}
-        style={{ minHeight: screen === 'playing' ? '55vh' : undefined }}
       >
         <canvas
           ref={initEngine}
