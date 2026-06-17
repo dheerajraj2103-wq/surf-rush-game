@@ -381,17 +381,14 @@ body {
 }
 
 /* When the game is over, let the area shrink to fit the modal content
-   instead of being held open by the canvas height. The canvas becomes
-   invisible under the overlay so its rendered size doesn't matter. */
+   instead of being held open by the canvas height. The overlay covers
+   everything so the canvas beneath doesn't need to render or receive events. */
 .game-area--gameover {
   height: auto !important;
   min-height: 0 !important;
 }
 
 .game-area--gameover canvas {
-  position: static !important;
-  width: 0 !important;
-  height: 0 !important;
   display: none !important;
 }
 
@@ -401,6 +398,8 @@ body {
   height: 100%;
   position: absolute;
   inset: 0;
+  z-index: 0;        /* canvas always behind overlays */
+  pointer-events: none; /* never intercept clicks — game uses its own listeners */
 }
 
 /* ─────────────────────────────────────────────
@@ -408,20 +407,24 @@ body {
 ───────────────────────────────────────────── */
 .overlay {
   position: relative;
+  z-index: 1;        /* above canvas (z-index: 0) */
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 20px;
   width: 100%;
+  pointer-events: none; /* overlay background itself doesn't need clicks */
 }
 
 /* ── Start screen ── */
 .start-overlay {
   background: linear-gradient(180deg, rgba(2,9,22,0.65) 0%, rgba(5,13,31,0.85) 100%);
   backdrop-filter: blur(2px);
+  pointer-events: all; /* start overlay needs to catch touches for swipe */
 }
 
 .start-content {
+  pointer-events: all; /* ensure buttons inside are clickable */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -569,6 +572,7 @@ body {
   overflow-y: auto;
   align-items: flex-start;
   padding: 16px 20px 20px;
+  pointer-events: all; /* overlay background re-enabled — it covers full area */
 }
 
 .gameover-modal {
@@ -581,6 +585,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  position: relative;
+  z-index: 2;        /* above overlay backdrop */
+  pointer-events: all; /* all buttons inside must be clickable */
   box-shadow:
     0 40px 100px rgba(0,0,0,0.9),
     0 0 60px rgba(34,211,238,0.12),
@@ -722,6 +729,12 @@ body {
   background: var(--green-dim);
   border: 1px solid rgba(16, 185, 129, 0.35);
   color: #6ee7b7;
+}
+
+.tx-pending {
+  background: var(--blue-dim);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: #7dd3fc;
 }
 
 .tx-error {
@@ -1011,6 +1024,9 @@ body {
   transition: var(--t-base);
   border: none;
   letter-spacing: 0.02em;
+  pointer-events: auto; /* override any inherited pointer-events: none from overlay wrapper */
+  position: relative;   /* ensure button sits in its own stacking context */
+  z-index: 1;
 }
 
 .action-btn:disabled {

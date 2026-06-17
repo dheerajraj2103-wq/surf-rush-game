@@ -10,6 +10,7 @@ import {
   connectWallet,
   disconnectWallet,
   isMetaMaskAvailable,
+  getWalletName,
   saveScoreOnChain,
   claimRewardOnChain,
   WalletState
@@ -165,9 +166,8 @@ function GameOverOverlay({
   onClaimReward,
 }: GameOverOverlayProps) {
   return (
-    // pointer-events: all ensures clicks are never swallowed by the canvas below
-    <div className="overlay gameover-overlay" style={{ pointerEvents: 'all' }}>
-      <div className="gameover-modal" onClick={(e) => e.stopPropagation()}>
+    <div className="overlay gameover-overlay">
+      <div className="gameover-modal">
         {isNewRecord && <div className="new-record-banner">🏆 NEW RECORD!</div>}
 
         <div className="gameover-header">
@@ -250,7 +250,11 @@ function GameOverOverlay({
         </div>
 
         {txStatus && (
-          <div className={`tx-status ${txStatus.startsWith('✅') ? 'tx-success' : 'tx-error'}`}>
+          <div className={`tx-status ${
+            txStatus.startsWith('✅') ? 'tx-success' :
+            txStatus.startsWith('⏳') ? 'tx-pending' :
+            'tx-error'
+          }`}>
             {txStatus}
           </div>
         )}
@@ -645,8 +649,9 @@ function App() {
     setWalletError(null);
     setTxStatus(null);
 
+    // Check for any injected web3 provider (MetaMask, Brave Wallet, Coinbase Wallet, etc.)
     if (!isMetaMaskAvailable()) {
-      const msg = 'MetaMask not found. Install MetaMask or open in a MetaMask-enabled browser.';
+      const msg = 'No wallet found. Please install MetaMask (or enable Brave Wallet) and refresh the page.';
       setWalletError(msg);
       setTxStatus(`❌ ${msg}`);
       return;
@@ -654,14 +659,21 @@ function App() {
 
     try {
       setTxLoading(true);
-      setTxStatus('Connecting wallet…');
+      setTxStatus('⏳ Requesting wallet access…');
       const connected = await connectWallet();
       setWallet(connected);
-      setTxStatus(`✅ Wallet connected: ${shortenAddress(connected.address!)}`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to connect wallet.';
-      setWalletError(msg);
-      setTxStatus(`❌ ${msg}`);
+      setTxStatus(`✅ ${getWalletName()} connected: ${shortenAddress(connected.address!)}`);
+    } catch (err: any) {
+      // User rejected the connection prompt
+      if (err.code === 4001 || err.message?.includes('rejected') || err.message?.includes('denied') || err.message?.includes('cancelled')) {
+        const msg = 'Connection cancelled. Click "Connect Wallet" to try again.';
+        setWalletError(msg);
+        setTxStatus(`❌ ${msg}`);
+      } else {
+        const msg = err instanceof Error ? err.message : 'Failed to connect wallet.';
+        setWalletError(msg);
+        setTxStatus(`❌ ${msg}`);
+      }
     } finally {
       setTxLoading(false);
     }

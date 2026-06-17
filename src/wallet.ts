@@ -27,30 +27,56 @@ declare global {
       on?: (event: string, handler: (...args: unknown[]) => void) => void;
       removeListener?: (event: string, handler: (...args: unknown[]) => void) => void;
       isMetaMask?: boolean;
+      isBraveWallet?: boolean;
+      isCoinbaseWallet?: boolean;
     };
   }
 }
 
+/**
+ * Returns true if any EIP-1193 compatible wallet provider is available.
+ * Works with MetaMask, Brave Wallet, Coinbase Wallet, Opera Wallet, etc.
+ */
 export function isMetaMaskAvailable(): boolean {
-  return typeof window.ethereum !== 'undefined';
+  return typeof window !== 'undefined' && typeof window.ethereum !== 'undefined';
+}
+
+/**
+ * Returns a human-readable label for the detected wallet provider.
+ * Used in status messages so users know which wallet is being used.
+ */
+export function getWalletName(): string {
+  if (!window.ethereum) return 'Wallet';
+  if (window.ethereum.isBraveWallet) return 'Brave Wallet';
+  if (window.ethereum.isCoinbaseWallet) return 'Coinbase Wallet';
+  if (window.ethereum.isMetaMask) return 'MetaMask';
+  return 'Wallet';
 }
 
 export async function connectWallet(): Promise<WalletState> {
   if (!window.ethereum) {
-    throw new Error('MetaMask is not installed. Please install it to connect your wallet.');
+    throw new Error(
+      'No wallet found. Please install MetaMask, enable Brave Wallet, or use a Web3-enabled browser.'
+    );
+  }
+
+  // Request account access — this triggers the wallet popup in all EIP-1193 browsers.
+  // Throws with code 4001 if the user rejects.
+  const accounts = (await window.ethereum.request({
+    method: 'eth_requestAccounts',
+  })) as string[];
+
+  if (!accounts || accounts.length === 0) {
+    throw new Error('No accounts returned. Please unlock your wallet and try again.');
   }
 
   const provider = new BrowserProvider(window.ethereum);
-  const accounts = (await window.ethereum.request({
-    method: 'eth_requestAccounts'
-  })) as string[];
-
   const signer = await provider.getSigner();
 
   return {
     address: accounts[0] ?? null,
     provider,
-    signer
+    signer,
   };
 }
 
