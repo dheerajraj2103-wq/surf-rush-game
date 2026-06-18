@@ -34,11 +34,30 @@ declare global {
 }
 
 /**
- * Returns true if any EIP-1193 compatible wallet provider is available.
- * Works with MetaMask, Brave Wallet, Coinbase Wallet, Opera Wallet, etc.
+ * Returns true if the device is a mobile device (Android or iOS).
+ */
+export function isMobileDevice(): boolean {
+  return /Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent);
+}
+
+/**
+ * Returns true if we are currently running INSIDE MetaMask Mobile's browser,
+ * Brave Mobile wallet, or another injected mobile wallet provider.
+ */
+export function isInjectedWalletAvailable(): boolean {
+  return typeof window !== 'undefined' && typeof window.ethereum !== 'undefined';
+}
+
+/**
+ * Legacy alias kept for callers in App.tsx.
+ * On desktop this is the same as checking window.ethereum exists.
+ * On mobile we return true so the flow continues to the deep-link path.
  */
 export function isMetaMaskAvailable(): boolean {
-  return typeof window !== 'undefined' && typeof window.ethereum !== 'undefined';
+  // Always return true — the connect flow itself decides whether to deep-link
+  // or call eth_requestAccounts. Returning false here blocks the entire flow
+  // on Android Chrome / Firefox / Opera where window.ethereum is undefined.
+  return true;
 }
 
 /**
@@ -53,31 +72,74 @@ export function getWalletName(): string {
   return 'Wallet';
 }
 
+/**
+ * Opens MetaMask Mobile deep-link so the dapp loads inside MetaMask's browser.
+ * Falls back to the MetaMask download page if the app is not installed.
+ *
+ * @param currentUrl - The full URL of this dapp (window.location.href).
+ */
+export function openMetaMaskMobileDeepLink(currentUrl: string): void {
+  // Strip the protocol from the URL for the deep-link format.
+  const dappUrl = currentUrl.replace(/^https?:\/\//, '');
+  // metamask.app.link/dapp/<url> opens MetaMask Mobile and navigates to the dapp.
+  const deepLink = `https://metamask.app.link/dapp/${dappUrl}`;
+  window.location.href = deepLink;
+}
+
+/**
+ * Main wallet connection function.
+ *
+ * Desktop  : calls eth_requestAccounts directly via window.ethereum.
+ * Mobile (no injected provider) : redirects to MetaMask Mobile deep-link.
+ * Mobile (inside MetaMask browser) : calls eth_requestAccounts normally.
+ *
+ * Throws a typed error so callers can distinguish user-rejection (code 4001)
+ * from missing-wallet errors (code 'NO_WALLET') and deep-link redirects
+ * (code 'DEEPLINK_REDIRECT').
+ */
 export async function connectWallet(): Promise<WalletState> {
-  if (!window.ethereum) {
-    throw new Error(
-      'No wallet found. Please install MetaMask, enable Brave Wallet, or use a Web3-enabled browser.'
+  // ── Case 1: injected provider present (desktop extension OR MetaMask Mobile browser)
+  if (isInjectedWalletAvailable()) {
+    const accounts = (await window.ethereum!.request({
+      method: 'eth_requestAccounts',
+    })) as string[];
+
+    if (!accounts || accounts.length === 0) {
+      throw Object.assign(
+        new Error('No accounts returned. Please unlock your wallet and try again.'),
+        { code: 'NO_ACCOUNTS' }
+      );
+    }
+
+    const provider = new BrowserProvider(window.ethereum!);
+    const signer = await provider.getSigner();
+
+    return {
+      address: accounts[0] ?? null,
+      provider,
+      signer,
+    };
+  }
+
+  // ── Case 2: mobile device without an injected provider
+  // Redirect to MetaMask Mobile so the dapp opens in its built-in browser.
+  if (isMobileDevice()) {
+    openMetaMaskMobileDeepLink(window.location.href);
+    // Throw a special error so the caller can show a "redirecting…" message
+    // and NOT show the generic "no wallet found" error.
+    throw Object.assign(
+      new Error('Redirecting to MetaMask Mobile…'),
+      { code: 'DEEPLINK_REDIRECT' }
     );
   }
 
-  // Request account access — this triggers the wallet popup in all EIP-1193 browsers.
-  // Throws with code 4001 if the user rejects.
-  const accounts = (await window.ethereum.request({
-    method: 'eth_requestAccounts',
-  })) as string[];
-
-  if (!accounts || accounts.length === 0) {
-    throw new Error('No accounts returned. Please unlock your wallet and try again.');
-  }
-
-  const provider = new BrowserProvider(window.ethereum);
-  const signer = await provider.getSigner();
-
-  return {
-    address: accounts[0] ?? null,
-    provider,
-    signer,
-  };
+  // ── Case 3: desktop without any wallet extension installed
+  throw Object.assign(
+    new Error(
+      'No wallet found. Please install MetaMask (metamask.io) or enable Brave Wallet, then refresh the page.'
+    ),
+    { code: 'NO_WALLET' }
+  );
 }
 
 export function disconnectWallet(): WalletState {

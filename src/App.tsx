@@ -9,7 +9,8 @@ import {
 import {
   connectWallet,
   disconnectWallet,
-  isMetaMaskAvailable,
+  isInjectedWalletAvailable,
+  isMobileDevice,
   getWalletName,
   saveScoreOnChain,
   claimRewardOnChain,
@@ -46,10 +47,10 @@ function WalletPanel({ address, onDisconnect, onCopy, copyFeedback }: WalletPane
         </div>
       </div>
       <div className="wallet-panel-actions">
-        <button className="copy-addr-btn" onClick={onCopy}>
+        <button className="copy-addr-btn" onClick={onCopy} type="button">
           {copyFeedback ? '✓ Copied' : 'Copy'}
         </button>
-        <button className="disconnect-btn" onClick={onDisconnect}>
+        <button className="disconnect-btn" onClick={onDisconnect} type="button">
           Disconnect
         </button>
       </div>
@@ -110,7 +111,7 @@ function StartOverlay({ onStart }: StartOverlayProps) {
           <div className="chip">🎁 Daily Rewards</div>
         </div>
 
-        <button className="play-btn" onClick={onStart}>
+        <button className="play-btn" onClick={onStart} type="button">
           START SURFING
         </button>
 
@@ -200,6 +201,7 @@ function GameOverOverlay({
               className="action-btn chain-action"
               style={{ marginTop: '8px' }}
               onClick={onClaimReward}
+              type="button"
               disabled={txLoading || !canClaimReward}
             >
               {txLoading
@@ -214,6 +216,7 @@ function GameOverOverlay({
               className="action-btn wallet-action"
               style={{ marginTop: '8px' }}
               onClick={onConnectWallet}
+              type="button"
               disabled={txLoading}
             >
               {txLoading ? <span className="spinner" /> : '◈ Connect Wallet to Claim'}
@@ -222,11 +225,11 @@ function GameOverOverlay({
         </div>
 
         <div className="gameover-actions">
-          <button className="action-btn primary-action" onClick={onRestart}>
+          <button className="action-btn primary-action" onClick={onRestart} type="button">
             ↺ Surf Again
           </button>
 
-          <button className="action-btn telegram-action" onClick={onShare}>
+          <button className="action-btn telegram-action" onClick={onShare} type="button">
             📲 Share on Telegram
           </button>
 
@@ -234,6 +237,7 @@ function GameOverOverlay({
             <button
               className="action-btn chain-action"
               onClick={onSaveOnChain}
+              type="button"
               disabled={txLoading}
             >
               {txLoading ? <span className="spinner" /> : '⛓️ Save Score On-Chain'}
@@ -242,6 +246,7 @@ function GameOverOverlay({
             <button
               className="action-btn wallet-action"
               onClick={onConnectWallet}
+              type="button"
               disabled={txLoading}
             >
               {txLoading ? <span className="spinner" /> : '◈ Connect Wallet to Save Score'}
@@ -329,7 +334,7 @@ function RulesModal({ onClose }: RulesModalProps) {
               <p>Surf Rush · Web3 Edition</p>
             </div>
           </div>
-          <button className="modal-close" onClick={onClose} aria-label="Close">✕</button>
+          <button className="modal-close" onClick={onClose} type="button" aria-label="Close">✕</button>
         </div>
 
         <div className="modal-content">
@@ -439,6 +444,7 @@ function RulesModal({ onClose }: RulesModalProps) {
               <div className="modal-item"><span className="modal-item-icon">◈</span><span>Connect MetaMask to unlock on-chain features</span></div>
               <div className="modal-item"><span className="modal-item-icon">📊</span><span>Save your high score permanently on-chain after each run</span></div>
               <div className="modal-item"><span className="modal-item-icon">🎁</span><span>Claim +500 coins as a daily reward once every 24 hours</span></div>
+              <div className="modal-item"><span className="modal-item-icon">📱</span><span>On Android, tap Connect Wallet to open in MetaMask Mobile</span></div>
             </div>
           </div>
         </div>
@@ -447,8 +453,8 @@ function RulesModal({ onClose }: RulesModalProps) {
   );
 }
 
-// ─── App ──────────────────────────────────────────────────────────────────────
-function App() {
+// ─── Main App ─────────────────────────────────────────────────────────────────
+export default function App() {
   // Refs
   const canvasRef     = useRef<HTMLCanvasElement | null>(null);
   const gameAreaRef   = useRef<HTMLDivElement | null>(null);
@@ -626,14 +632,14 @@ function App() {
   const startGame = useCallback(() => {
     setScreen('playing');
     setTxStatus(null);
-    setTxLoading(false);
+    setTxLoading(false); // FIX: always reset loading state on new game
     engineRef.current?.start();
   }, []);
 
   const restartGame = useCallback(() => {
     setScreen('playing');
     setTxStatus(null);
-    setTxLoading(false);
+    setTxLoading(false); // FIX: always reset loading state on restart
     engineRef.current?.restart();
   }, []);
 
@@ -642,38 +648,68 @@ function App() {
   }, []);
 
   // ── Wallet actions ─────────────────────────────────────────────────────────
-  // FIX: handleConnectWallet now also clears txStatus so the game-over modal
-  // feedback area is reset, and sets a success txStatus when connection works
-  // so the user gets visible in-modal confirmation.
   const handleConnectWallet = useCallback(async () => {
     setWalletError(null);
     setTxStatus(null);
 
-    // Check for any injected web3 provider (MetaMask, Brave Wallet, Coinbase Wallet, etc.)
-    if (!isMetaMaskAvailable()) {
-      const msg = 'No wallet found. Please install MetaMask (or enable Brave Wallet) and refresh the page.';
-      setWalletError(msg);
-      setTxStatus(`❌ ${msg}`);
-      return;
-    }
+    // FIX: Do NOT gate on isMetaMaskAvailable() here anymore.
+    // connectWallet() in wallet.ts now handles the three cases:
+    //   1. Injected provider present → connect normally
+    //   2. Mobile without provider   → deep-link to MetaMask Mobile
+    //   3. Desktop without provider  → throw NO_WALLET error
+    // We only need to show loading state and handle the result.
 
     try {
       setTxLoading(true);
-      setTxStatus('⏳ Requesting wallet access…');
+
+      // Show different message depending on platform
+      if (!isInjectedWalletAvailable() && isMobileDevice()) {
+        setTxStatus('⏳ Opening MetaMask Mobile…');
+      } else {
+        setTxStatus('⏳ Requesting wallet access…');
+      }
+
       const connected = await connectWallet();
       setWallet(connected);
+      setWalletError(null);
       setTxStatus(`✅ ${getWalletName()} connected: ${shortenAddress(connected.address!)}`);
     } catch (err: any) {
-      // User rejected the connection prompt
-      if (err.code === 4001 || err.message?.includes('rejected') || err.message?.includes('denied') || err.message?.includes('cancelled')) {
-        const msg = 'Connection cancelled. Click "Connect Wallet" to try again.';
-        setWalletError(msg);
-        setTxStatus(`❌ ${msg}`);
-      } else {
-        const msg = err instanceof Error ? err.message : 'Failed to connect wallet.';
-        setWalletError(msg);
-        setTxStatus(`❌ ${msg}`);
+      // Deep-link redirect: the page is about to navigate away, show a friendly message
+      if (err.code === 'DEEPLINK_REDIRECT') {
+        setTxStatus('📱 Opening MetaMask Mobile… return here after connecting.');
+        // Don't show as error — the redirect is intentional
+        setTxLoading(false);
+        return;
       }
+
+      // No wallet installed on desktop
+      if (err.code === 'NO_WALLET') {
+        const msg = err.message;
+        setWalletError(msg);
+        setTxStatus(`❌ ${msg}`);
+        setTxLoading(false);
+        return;
+      }
+
+      // User rejected the connection prompt (EIP-1193 error code 4001)
+      if (
+        err.code === 4001 ||
+        err.message?.includes('rejected') ||
+        err.message?.includes('denied') ||
+        err.message?.includes('cancelled') ||
+        err.message?.includes('User rejected')
+      ) {
+        const msg = 'Connection cancelled. Tap "Connect Wallet" to try again.';
+        setWalletError(msg);
+        setTxStatus(`❌ ${msg}`);
+        setTxLoading(false);
+        return;
+      }
+
+      // Generic fallback
+      const msg = err instanceof Error ? err.message : 'Failed to connect wallet.';
+      setWalletError(msg);
+      setTxStatus(`❌ ${msg}`);
     } finally {
       setTxLoading(false);
     }
@@ -705,11 +741,11 @@ function App() {
     }
     try {
       setTxLoading(true);
-      setTxStatus('Saving score on-chain… approve in MetaMask.');
+      setTxStatus('Saving score on-chain… approve in your wallet.');
       const hash = await saveScoreOnChain(signer, finalScore);
       setTxStatus(`✅ Score saved! Tx: ${shortenAddress(hash)}`);
     } catch (err: any) {
-      if (err.code === 4001 || err.message?.includes('rejected') || err.message?.includes('denied')) {
+      if (err.code === 4001 || err.message?.includes('rejected') || err.message?.includes('denied') || err.message?.includes('User rejected')) {
         setTxStatus('❌ Transaction cancelled.');
       } else {
         setTxStatus(`❌ ${err.message || 'Transaction failed.'}`);
@@ -741,14 +777,14 @@ function App() {
 
     try {
       setTxLoading(true);
-      setTxStatus('Waiting for wallet approval… approve in MetaMask.');
+      setTxStatus('Waiting for wallet approval… approve in your wallet.');
       const hash = await claimRewardOnChain(signer);
       const now  = Date.now();
       localStorage.setItem('surfRushLastClaim', String(now));
       setLastClaimTime(now);
       setTxStatus(`✅ Reward claimed! Tx: ${shortenAddress(hash)}`);
     } catch (err: any) {
-      if (err.code === 4001 || err.message?.includes('rejected') || err.message?.includes('denied')) {
+      if (err.code === 4001 || err.message?.includes('rejected') || err.message?.includes('denied') || err.message?.includes('User rejected')) {
         setTxStatus('❌ Transaction cancelled.');
       } else {
         setTxStatus('❌ Transaction failed. Please try again.');
@@ -788,7 +824,7 @@ function App() {
         </div>
 
         <div className="topbar-right">
-          <button className="rules-btn" onClick={() => setShowRules(true)}>
+          <button className="rules-btn" onClick={() => setShowRules(true)} type="button">
             📜 How to Play
           </button>
 
@@ -797,13 +833,16 @@ function App() {
           )}
 
           {wallet.address ? (
-            <button className="wallet-btn connected" onClick={handleDisconnectWallet}>
+            <button className="wallet-btn connected" onClick={handleDisconnectWallet} type="button">
               <span className="wallet-dot" />
               {shortenAddress(wallet.address)}
             </button>
           ) : (
-            <button className="wallet-btn" onClick={handleConnectWallet}>
-              <span className="wallet-icon">◈</span> Connect Wallet
+            <button className="wallet-btn" onClick={handleConnectWallet} type="button" disabled={txLoading}>
+              {txLoading
+                ? <><span className="spinner" style={{ width: 12, height: 12, borderWidth: 2 }} /> Connecting…</>
+                : <><span className="wallet-icon">◈</span> Connect Wallet</>
+              }
             </button>
           )}
         </div>
@@ -870,11 +909,11 @@ function App() {
       {/* Mobile controls */}
       {screen === 'playing' && (
         <div className="controls">
-          <button className="ctrl-btn" onPointerDown={() => engineRef.current?.moveLeft()}>◀</button>
-          <button className="ctrl-btn pause-btn" onPointerDown={togglePause}>
+          <button className="ctrl-btn" onPointerDown={() => engineRef.current?.moveLeft()} type="button">◀</button>
+          <button className="ctrl-btn pause-btn" onPointerDown={togglePause} type="button">
             {gameState?.isPaused ? '▶' : '⏸'}
           </button>
-          <button className="ctrl-btn" onPointerDown={() => engineRef.current?.moveRight()}>▶</button>
+          <button className="ctrl-btn" onPointerDown={() => engineRef.current?.moveRight()} type="button">▶</button>
         </div>
       )}
 
@@ -887,5 +926,3 @@ function App() {
     </div>
   );
 }
-
-export default App;

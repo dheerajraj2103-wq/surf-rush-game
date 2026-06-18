@@ -120,11 +120,31 @@ export class GameEngine {
   private shieldPulse = 0;
   private magnetPulse = 0;
 
+  // PERF FIX: the deep-ocean background gradient only depends on
+  // width/height, not on time — previously it was rebuilt with
+  // createLinearGradient() every single frame (60×/sec), which is one of
+  // the more expensive Canvas2D calls. Cache it and only rebuild on resize.
+  private bgGradientCache: CanvasGradient | null = null;
+
+  // PERF FIX: detect lower-powered devices (most Android phones report
+  // fewer logical cores than desktops) and a mobile/coarse-pointer
+  // environment, so the render loop can skip the most expensive
+  // decorative-only effects (light rays, per-frame speed-line redraw,
+  // heavy shadowBlur glows) without changing any gameplay logic.
+  private isLowPower: boolean =
+    typeof navigator !== 'undefined' &&
+    (((navigator as any).hardwareConcurrency ?? 8) <= 4 ||
+      (typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches === true));
+
   private state: GameState = this.defaultState();
 
   constructor(canvas: HTMLCanvasElement, callbacks: GameCallbacks) {
     this.canvas    = canvas;
-    const ctx      = canvas.getContext('2d');
+    // PERF FIX: { alpha: false } tells the browser this canvas never needs
+    // to composite with transparency beneath it (drawBackground() always
+    // paints a fully opaque rect first), which lets the browser skip alpha
+    // blending work on every frame — a meaningful saving on Android GPUs.
+    const ctx      = canvas.getContext('2d', { alpha: false });
     if (!ctx) throw new Error('Canvas 2D context not available');
     this.ctx       = ctx;
     this.callbacks = callbacks;
@@ -148,6 +168,13 @@ export class GameEngine {
 
   public start(): void {
     this.cancelLoop();
+    // FIX: re-measure the container right before play begins. The very
+    // first resize() runs in a deferred microtask after construction
+    // (see constructor), so if the user taps "Start" before that
+    // microtask flushes — or before Android's layout has settled —
+    // start() could begin with stale/zero playerY. Resizing here
+    // guarantees correct, current dimensions every time a run starts.
+    this.resize();
     this.reset();
     this.lastTimestamp = performance.now();
     this.animationFrameId = requestAnimationFrame(this.loop);
@@ -190,6 +217,7 @@ export class GameEngine {
 
   public restart(): void {
     this.cancelLoop();
+    this.resize(); // FIX: same reasoning as start() — always measure fresh
     this.reset();
     this.lastTimestamp    = performance.now();
     this.animationFrameId = requestAnimationFrame(this.loop);
@@ -235,7 +263,10 @@ export class GameEngine {
   }
 
   private initBubbles(): void {
-    this.bubbles = Array.from({ length: 22 }, () => ({
+    // PERF FIX: fewer ambient bubbles on low-power/mobile devices —
+    // each one is a stroked arc redrawn every frame.
+    const count = this.isLowPower ? 12 : 22;
+    this.bubbles = Array.from({ length: count }, () => ({
       x:       Math.random() * this.width,
       y:       Math.random() * this.height,
       r:       Math.random() * 3 + 1,
@@ -285,16 +316,25 @@ export class GameEngine {
     const rawW = parent ? parent.clientWidth  : 360;
     const rawH = parent ? parent.clientHeight : 640;
 
-    this.width     = Math.max(280, Math.min(rawW, 480));
-    // Use parent height directly; only fall back to 640 when the parent hasn't
-    // painted yet (rawH ≤ 10). Do NOT enforce a minimum of 480 here — doing so
-    // would prevent the container from shrinking on the game-over screen and
-    // would create a large empty dark region above the modal.
-    this.height    = rawH > 10 ? rawH : 640;
+    this.width = Math.max(280, Math.min(rawW, 480));
+
+    // FIX (root cause of instant WIPEOUT on Android): previously this only
+    // fell back to 640 when rawH <= 10, otherwise trusting rawH directly.
+    // On Android Chrome the game-area container could briefly report a
+    // tiny-but-nonzero height (e.g. during address-bar collapse/expand, or
+    // before the flex layout settled), which produced a tiny `this.height`.
+    // That made `playerY = height - 90` go negative, so the very first
+    // obstacle spawned off-screen already overlapped the player hitbox —
+    // an immediate, unwinnable collision. Clamping to a sane minimum here
+    // guarantees playerY is always a sensible, positive, on-screen value
+    // regardless of what the DOM reports mid-layout.
+    const MIN_PLAYABLE_HEIGHT = 480;
+    this.height    = rawH >= MIN_PLAYABLE_HEIGHT ? rawH : MIN_PLAYABLE_HEIGHT;
     this.laneWidth = this.width / LANE_COUNT;
 
     this.canvas.width  = this.width;
     this.canvas.height = this.height;
+    this.bgGradientCache = null; // dimensions changed — force gradient rebuild next frame
 
     this.playerX       = this.laneCenter(this.playerLane);
     this.playerTargetX = this.playerX;
@@ -336,6 +376,15 @@ export class GameEngine {
     if (now < this.state.slowUntil)       speed *= 0.5;
     if (now < this.state.freezeUntil)     speed  = 0;
     return speed;
+  }
+
+  /** PERF FIX: shadowBlur is one of the most expensive Canvas2D operations
+   *  on mobile GPUs because it requires an extra blur pass per shape. Scale
+   *  every glow request down on low-power devices instead of disabling
+   *  glows altogether, preserving the visual identity of the game while
+   *  cutting the render cost meaningfully. */
+  private blur(amount: number): number {
+    return this.isLowPower ? amount * 0.4 : amount;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -470,6 +519,14 @@ export class GameEngine {
   }
 
   private handleCollisions(): void {
+    // DEFENSIVE FIX: in addition to the resize() height clamp, never allow a
+    // collision to register before the player has had at least a brief
+    // grace period after a run starts. This is a second line of defense
+    // against the WIPEOUT bug — if any future layout change ever causes a
+    // small/degenerate canvas height again, players get a safe window
+    // instead of an instant, unwinnable loss.
+    if (this.elapsedSeconds < 0.3) return;
+
     const playerTop    = this.playerY - 40;
     const playerBottom = this.playerY + 40;
 
@@ -577,32 +634,40 @@ export class GameEngine {
     const w   = this.width;
     const h   = this.height;
 
-    // Deep ocean gradient
-    const bg = ctx.createLinearGradient(0, 0, 0, h);
-    bg.addColorStop(0,    '#0c1445');
-    bg.addColorStop(0.35, '#0a3566');
-    bg.addColorStop(0.7,  '#0369a1');
-    bg.addColorStop(1,    '#0ea5e9');
-    ctx.fillStyle = bg;
+    // PERF FIX: rebuild only when dimensions changed (cache invalidated in
+    // resize()) instead of calling createLinearGradient every frame.
+    if (!this.bgGradientCache) {
+      const bg = ctx.createLinearGradient(0, 0, 0, h);
+      bg.addColorStop(0,    '#0c1445');
+      bg.addColorStop(0.35, '#0a3566');
+      bg.addColorStop(0.7,  '#0369a1');
+      bg.addColorStop(1,    '#0ea5e9');
+      this.bgGradientCache = bg;
+    }
+    ctx.fillStyle = this.bgGradientCache;
     ctx.fillRect(0, 0, w, h);
 
-    // Underwater light rays
-    ctx.save();
-    for (let r = 0; r < 5; r++) {
-      const rx      = (w / 5) * r + w / 10;
-      const rayGrad = ctx.createLinearGradient(rx, 0, rx + 15, h * 0.6);
-      rayGrad.addColorStop(0, 'rgba(255,255,255,0.04)');
-      rayGrad.addColorStop(1, 'rgba(255,255,255,0)');
-      ctx.fillStyle = rayGrad;
-      ctx.beginPath();
-      ctx.moveTo(rx - 10, 0);
-      ctx.lineTo(rx + 10, 0);
-      ctx.lineTo(rx + 25 + Math.sin(this.waveTime * 0.5 + r) * 5, h * 0.6);
-      ctx.lineTo(rx - 5  + Math.sin(this.waveTime * 0.5 + r) * 5, h * 0.6);
-      ctx.closePath();
-      ctx.fill();
+    // PERF FIX: underwater light rays are purely decorative and rebuild
+    // 5 gradients + paths every frame. Skip entirely on low-power/mobile
+    // devices — visually minor, meaningfully cheaper per frame.
+    if (!this.isLowPower) {
+      ctx.save();
+      for (let r = 0; r < 5; r++) {
+        const rx      = (w / 5) * r + w / 10;
+        const rayGrad = ctx.createLinearGradient(rx, 0, rx + 15, h * 0.6);
+        rayGrad.addColorStop(0, 'rgba(255,255,255,0.04)');
+        rayGrad.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = rayGrad;
+        ctx.beginPath();
+        ctx.moveTo(rx - 10, 0);
+        ctx.lineTo(rx + 10, 0);
+        ctx.lineTo(rx + 25 + Math.sin(this.waveTime * 0.5 + r) * 5, h * 0.6);
+        ctx.lineTo(rx - 5  + Math.sin(this.waveTime * 0.5 + r) * 5, h * 0.6);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
     }
-    ctx.restore();
 
     // Bubbles
     ctx.save();
@@ -620,7 +685,11 @@ export class GameEngine {
       ctx.save();
       ctx.beginPath();
       ctx.moveTo(0, h * wl.y);
-      for (let x = 0; x <= w; x += 4) {
+      // PERF FIX: step by 8px instead of 4px on low-power devices — half
+      // as many path segments for a wave shape that's visually identical
+      // at normal viewing distance.
+      const step = this.isLowPower ? 8 : 4;
+      for (let x = 0; x <= w; x += step) {
         ctx.lineTo(x, h * wl.y + Math.sin(x * 0.025 + wl.offset) * wl.amplitude);
       }
       ctx.lineTo(w, h);
@@ -668,7 +737,9 @@ export class GameEngine {
     const ctx = this.ctx;
     ctx.save();
     ctx.globalAlpha = 0.15;
-    for (let i = 0; i < 8; i++) {
+    // PERF FIX: half the streak count on low-power devices.
+    const count = this.isLowPower ? 4 : 8;
+    for (let i = 0; i < count; i++) {
       const sx = Math.random() * this.width;
       const sy = (this.waveTime * 300 * (i + 1) * 0.3) % this.height;
       ctx.strokeStyle = '#7dd3fc';
