@@ -150,27 +150,179 @@ export function getContract(signer: JsonRpcSigner): Contract {
   return new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
 }
 
+/**
+ * Classifies any error thrown by ethers or a wallet provider and returns a
+ * clean, human-readable message string.
+ *
+ * Ethers v6 uses string codes like 'ACTION_REJECTED', 'CALL_EXCEPTION',
+ * 'INSUFFICIENT_FUNDS', 'NETWORK_ERROR', 'TIMEOUT' etc. — NOT the numeric
+ * EIP-1193 code 4001 that MetaMask used to surface directly.  Both patterns
+ * are checked here so the handlers in App.tsx always get a typed result
+ * instead of having to duplicate these checks.
+ */
+export type TxErrorKind =
+  | 'rejected'      // user pressed Reject in wallet
+  | 'reverted'      // contract reverted (e.g. canClaim returned false)
+  | 'funds'         // not enough ETH for gas
+  | 'network'       // RPC connectivity issue
+  | 'timeout'       // tx.wait() timed out
+  | 'unknown';      // anything else
+
+export interface TxError {
+  kind: TxErrorKind;
+  message: string;
+}
+
+export function classifyTxError(err: unknown): TxError {
+  const e = err as any;
+  const code: unknown    = e?.code;
+  const msg: string      = (e?.message ?? e?.reason ?? String(err)).toLowerCase();
+  const info: string     = JSON.stringify(e?.info ?? e?.data ?? '').toLowerCase();
+
+  // ── User rejected ──────────────────────────────────────────────────────────
+  // Ethers v6: ACTION_REJECTED  |  EIP-1193 legacy: 4001
+  if (
+    code === 'ACTION_REJECTED' ||
+    code === 4001 ||
+    msg.includes('user rejected') ||
+    msg.includes('user denied') ||
+    msg.includes('rejected') ||
+    msg.includes('denied') ||
+    msg.includes('cancelled') ||
+    msg.includes('cancel')
+  ) {
+    return { kind: 'rejected', message: 'Transaction rejected. Tap the button to try again.' };
+  }
+
+  // ── Contract reverted ──────────────────────────────────────────────────────
+  // Ethers v6: CALL_EXCEPTION  |  receipt.status === 0
+  if (
+    code === 'CALL_EXCEPTION' ||
+    msg.includes('execution reverted') ||
+    msg.includes('revert') ||
+    msg.includes('call exception')
+  ) {
+    // Try to extract a human-readable revert reason if present
+    const reason =
+      e?.reason ||
+      e?.data?.message ||
+      (info.includes('already claimed') ? 'Reward already claimed today.' : null);
+    return {
+      kind: 'reverted',
+      message: reason
+        ? `Transaction reverted: ${reason}`
+        : 'Transaction was reverted by the contract. Check eligibility and try again.',
+    };
+  }
+
+  // ── Insufficient funds ─────────────────────────────────────────────────────
+  if (
+    code === 'INSUFFICIENT_FUNDS' ||
+    msg.includes('insufficient funds') ||
+    msg.includes('insufficient balance')
+  ) {
+    return { kind: 'funds', message: 'Insufficient ETH for gas fees. Please top up your wallet.' };
+  }
+
+  // ── Network / RPC ──────────────────────────────────────────────────────────
+  if (
+    code === 'NETWORK_ERROR' ||
+    code === 'SERVER_ERROR' ||
+    msg.includes('network') ||
+    msg.includes('could not connect') ||
+    msg.includes('failed to fetch')
+  ) {
+    return { kind: 'network', message: 'Network error. Check your connection and try again.' };
+  }
+
+  // ── Timeout ────────────────────────────────────────────────────────────────
+  if (code === 'TIMEOUT' || msg.includes('timeout') || msg.includes('timed out')) {
+    return { kind: 'timeout', message: 'Transaction timed out. It may still confirm — check your wallet.' };
+  }
+
+  // ── Fallback ───────────────────────────────────────────────────────────────
+  const rawMsg = (err as any)?.message || String(err);
+  return {
+    kind: 'unknown',
+    message: rawMsg.length < 180 ? rawMsg : 'Transaction failed. Please try again.',
+  };
+}
+
+/**
+ * Wraps tx.wait() with a hard timeout so the UI never hangs forever.
+ * ethers v6 tx.wait() can block indefinitely on slow / unresponsive RPCs.
+ *
+ * @param tx      - The ContractTransactionResponse returned by a write call.
+ * @param ms      - Timeout in milliseconds (default 60 s).
+ * @returns         The transaction hash on success.
+ * @throws          A typed TxError-compatible error on timeout, revert, or other failure.
+ */
+async function waitForTx(
+  tx: { wait: () => Promise<unknown>; hash: string },
+  ms = 60_000
+): Promise<string> {
+  let timeoutId: ReturnType<typeof setTimeout>;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(Object.assign(
+        new Error(`Transaction timed out after ${ms / 1000}s. It may still confirm — check your wallet.`),
+        { code: 'TIMEOUT' }
+      ));
+    }, ms);
+  });
+
+  try {
+    const receipt = await Promise.race([tx.wait(), timeoutPromise]);
+
+    // ethers v6: tx.wait() returns null when the tx was replaced/cancelled,
+    // and throws CALL_EXCEPTION for revert.  A null receipt means the tx is
+    // gone (dropped or replaced) — treat it as an error so the UI unlocks.
+    if (receipt === null || receipt === undefined) {
+      throw Object.assign(
+        new Error('Transaction dropped or replaced. Please try again.'),
+        { code: 'CALL_EXCEPTION' }
+      );
+    }
+
+    // Check receipt.status if present (0 = reverted, 1 = success)
+    const status = (receipt as any)?.status;
+    if (status === 0) {
+      throw Object.assign(
+        new Error('Transaction was reverted by the contract.'),
+        { code: 'CALL_EXCEPTION' }
+      );
+    }
+
+    return tx.hash;
+  } finally {
+    clearTimeout(timeoutId!);
+  }
+}
+
 export async function saveScoreOnChain(signer: JsonRpcSigner, score: number): Promise<string> {
   const contract = getContract(signer);
-  const tx = await contract.saveScore(BigInt(score));
-  await tx.wait();
-  return tx.hash;
+  // contract.saveScore() submits the transaction and returns a response object.
+  // waitForTx() then waits for the on-chain confirmation with a 60 s timeout.
+  const tx = await (contract.saveScore(BigInt(score)) as Promise<{ wait: () => Promise<unknown>; hash: string }>);
+  return waitForTx(tx);
 }
 
 export async function claimRewardOnChain(signer: JsonRpcSigner): Promise<string> {
   const contract = getContract(signer);
-  const tx = await contract.claimReward();
-  await tx.wait();
-  return tx.hash;
+  // contract.claimReward() submits the transaction and returns a response object.
+  // waitForTx() then waits for the on-chain confirmation with a 60 s timeout.
+  const tx = await (contract.claimReward() as Promise<{ wait: () => Promise<unknown>; hash: string }>);
+  return waitForTx(tx);
 }
 
 export async function getPlayerScoreOnChain(signer: JsonRpcSigner, address: string): Promise<number> {
   const contract = getContract(signer);
-  const score: bigint = await contract.getPlayerScore(address);
+  const score: bigint = await contract.getPlayerScore(address) as bigint;
   return Number(score);
 }
 
 export async function canClaimOnChain(signer: JsonRpcSigner, address: string): Promise<boolean> {
   const contract = getContract(signer);
-  return await contract.canClaim(address);
+  return await contract.canClaim(address) as boolean;
 }
