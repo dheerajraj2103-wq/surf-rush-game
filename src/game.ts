@@ -149,11 +149,20 @@ export class GameEngine {
     this.ctx       = ctx;
     this.callbacks = callbacks;
 
-    // Defer the first resize to the next microtask so the canvas node has been
-    // fully laid out by the browser (avoids 0×0 dimensions on first paint).
+    // FIX: Initialize wave layers and bubbles SYNCHRONOUSLY so they are
+    // always available even if start() is called before the deferred task
+    // below runs. Previously these were only set up in the microtask, so
+    // calling start() quickly could leave waveLayers/bubbles empty, causing
+    // drawBackground() to silently fail and the loop to behave incorrectly.
+    this.initWaveLayers();
+    this.initBubbles();
+
+    // Defer the first resize + idle render to the next microtask so the
+    // canvas node has been fully laid out by the browser (avoids 0×0
+    // dimensions on first paint).
     Promise.resolve().then(() => {
       this.resize();
-      this.initWaveLayers();
+      // Re-scatter bubbles now that we have real dimensions.
       this.initBubbles();
       // Draw the idle ocean scene immediately so the game area is never blank.
       this.renderIdleBackground();
@@ -175,6 +184,11 @@ export class GameEngine {
     // start() could begin with stale/zero playerY. Resizing here
     // guarantees correct, current dimensions every time a run starts.
     this.resize();
+    // FIX: ensure wave layers and bubbles are always populated before the
+    // loop begins, even if the constructor's deferred microtask hasn't run
+    // yet (e.g. user taps Start very quickly after page load).
+    if (this.waveLayers.length === 0) this.initWaveLayers();
+    if (this.bubbles.length === 0)    this.initBubbles();
     this.reset();
     this.lastTimestamp = performance.now();
     this.animationFrameId = requestAnimationFrame(this.loop);
@@ -218,6 +232,8 @@ export class GameEngine {
   public restart(): void {
     this.cancelLoop();
     this.resize(); // FIX: same reasoning as start() — always measure fresh
+    if (this.waveLayers.length === 0) this.initWaveLayers();
+    if (this.bubbles.length === 0)    this.initBubbles();
     this.reset();
     this.lastTimestamp    = performance.now();
     this.animationFrameId = requestAnimationFrame(this.loop);
@@ -318,18 +334,18 @@ export class GameEngine {
 
     this.width = Math.max(280, Math.min(rawW, 480));
 
-    // FIX (root cause of instant WIPEOUT on Android): previously this only
-    // fell back to 640 when rawH <= 10, otherwise trusting rawH directly.
-    // On Android Chrome the game-area container could briefly report a
-    // tiny-but-nonzero height (e.g. during address-bar collapse/expand, or
-    // before the flex layout settled), which produced a tiny `this.height`.
-    // That made `playerY = height - 90` go negative, so the very first
-    // obstacle spawned off-screen already overlapped the player hitbox —
-    // an immediate, unwinnable collision. Clamping to a sane minimum here
-    // guarantees playerY is always a sensible, positive, on-screen value
-    // regardless of what the DOM reports mid-layout.
-    const MIN_PLAYABLE_HEIGHT = 480;
-    this.height    = rawH >= MIN_PLAYABLE_HEIGHT ? rawH : MIN_PLAYABLE_HEIGHT;
+    // FIX (root cause of instant WIPEOUT): Always enforce a minimum playable
+    // height. If the game-area container reports a height smaller than
+    // MIN_PLAYABLE_HEIGHT (e.g. on Android Chrome during address-bar
+    // collapse/expand, before flex layout settles, or when the CSS hasn't
+    // applied yet), playerY = height - 90 would be very small or negative,
+    // making the player spawn near the top of the canvas. The very first
+    // spawned obstacle (y = -60) would then reach playerY within a fraction
+    // of a second — an unwinnable instant collision.
+    // Using Math.max unconditionally (not a conditional branch) ensures we
+    // ALWAYS get a safe height, even for heights between 1 and MIN-1.
+    const MIN_PLAYABLE_HEIGHT = 500;
+    this.height    = Math.max(rawH, MIN_PLAYABLE_HEIGHT);
     this.laneWidth = this.width / LANE_COUNT;
 
     this.canvas.width  = this.width;
@@ -496,10 +512,15 @@ export class GameEngine {
     const lane = Math.floor(Math.random() * LANE_COUNT) as LaneIndex;
     const roll = Math.random();
 
+    // FIX: spawn entities well off the top of the screen (y = -80 instead
+    // of -60) so there is no chance of a collision on the very first frame
+    // they appear, even on small canvas heights.
+    const spawnY = -80;
+
     if (roll < 0.55) {
       const type = OBSTACLE_TYPES[Math.floor(Math.random() * OBSTACLE_TYPES.length)];
       this.obstacles.push({
-        lane, y: -60,
+        lane, y: spawnY,
         width:  this.laneWidth * 0.6,
         height: 50,
         type,
@@ -509,7 +530,7 @@ export class GameEngine {
       const pool = Math.random() < 0.65 ? POSITIVE_BOXES : NEGATIVE_BOXES;
       const type = pool[Math.floor(Math.random() * pool.length)] ?? ALL_BOXES[0];
       this.boxes.push({
-        lane, y: -60,
+        lane, y: spawnY,
         width:  this.laneWidth * 0.5,
         height: 40,
         type,
@@ -519,13 +540,16 @@ export class GameEngine {
   }
 
   private handleCollisions(): void {
-    // DEFENSIVE FIX: in addition to the resize() height clamp, never allow a
-    // collision to register before the player has had at least a brief
-    // grace period after a run starts. This is a second line of defense
-    // against the WIPEOUT bug — if any future layout change ever causes a
-    // small/degenerate canvas height again, players get a safe window
-    // instead of an instant, unwinnable loss.
-    if (this.elapsedSeconds < 0.3) return;
+    // DEFENSIVE FIX: Never allow a collision to register before the player
+    // has had a grace period after a run starts. This is a critical line of
+    // defense against the WIPEOUT bug — if any layout change causes a
+    // degenerate canvas height, players always get a safe window.
+    // Increased from 0.3s to 0.5s for extra safety on slow-layout devices.
+    if (this.elapsedSeconds < 0.5) return;
+
+    // Safety check: if playerY is unrealistically small (layout not settled),
+    // skip collision detection entirely for this frame.
+    if (this.playerY < 50) return;
 
     const playerTop    = this.playerY - 40;
     const playerBottom = this.playerY + 40;

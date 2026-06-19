@@ -565,6 +565,13 @@ export default function App() {
       return;
     }
 
+    // FIX: if the same canvas element is passed again (React Strict Mode
+    // double-invoke, or some other re-call), don't recreate the engine —
+    // that would register a second engine against the same canvas and fire
+    // onGameOver from the first engine's stale closure while the second is
+    // also running, causing an immediate game-over transition.
+    if (canvas === canvasRef.current && engineRef.current) return;
+
     canvasRef.current = canvas;
     engineRef.current?.stop();
 
@@ -633,14 +640,26 @@ export default function App() {
     setScreen('playing');
     setTxStatus(null);
     setTxLoading(false); // FIX: always reset loading state on new game
-    engineRef.current?.start();
+    // FIX: defer engine.start() by one rAF so the 'playing' screen state
+    // has been committed to the DOM and the game-area div has its final
+    // layout dimensions before resize() runs inside start(). Without this,
+    // start() could read a 0 or minimal clientHeight from the container
+    // (because the StartOverlay is still mounted during this synchronous
+    // call), leading to a tiny playerY and near-immediate collision.
+    requestAnimationFrame(() => {
+      engineRef.current?.start();
+    });
   }, []);
 
   const restartGame = useCallback(() => {
     setScreen('playing');
     setTxStatus(null);
     setTxLoading(false); // FIX: always reset loading state on restart
-    engineRef.current?.restart();
+    // FIX: same deferred-start fix as startGame — wait one rAF so the
+    // gameover overlay is unmounted and the game-area has correct dimensions.
+    requestAnimationFrame(() => {
+      engineRef.current?.restart();
+    });
   }, []);
 
   const togglePause = useCallback(() => {
@@ -879,6 +898,7 @@ export default function App() {
       <div
         className={`game-area${screen === 'gameover' ? ' game-area--gameover' : ''}`}
         ref={gameAreaRef}
+        style={{ minHeight: '500px' }}
       >
         <canvas
           ref={initEngine}
