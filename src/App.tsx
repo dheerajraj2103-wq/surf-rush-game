@@ -14,6 +14,7 @@ import {
   getWalletName,
   saveScoreOnChain,
   claimRewardOnChain,
+  subscribeToChainChanges,
   WalletState
 } from './wallet';
 import { initTelegram, getTelegramUser, shareScore } from './telegram';
@@ -29,12 +30,13 @@ function shortenAddress(address: string): string {
 // ─── Wallet Panel ─────────────────────────────────────────────────────────────
 interface WalletPanelProps {
   address: string;
+  networkName: string | null;
   onDisconnect: () => void;
   onCopy: () => void;
   copyFeedback: boolean;
 }
 
-function WalletPanel({ address, onDisconnect, onCopy, copyFeedback }: WalletPanelProps) {
+function WalletPanel({ address, networkName, onDisconnect, onCopy, copyFeedback }: WalletPanelProps) {
   return (
     <div className="wallet-panel">
       <div className="wallet-panel-icon">◈</div>
@@ -43,7 +45,11 @@ function WalletPanel({ address, onDisconnect, onCopy, copyFeedback }: WalletPane
         <div className="wallet-panel-address">{address}</div>
         <div className="wallet-panel-status">
           <span className="wallet-dot" />
-          <span className="wallet-panel-net">Ethereum Mainnet</span>
+          {/* FIX: was hardcoded to "Ethereum Mainnet" regardless of the
+              actually-connected chain. Now reflects wallet.networkName,
+              which is detected live from the provider and kept in sync
+              via the chainChanged listener in App(). */}
+          <span className="wallet-panel-net">{networkName ?? 'Detecting network…'}</span>
         </div>
       </div>
       <div className="wallet-panel-actions">
@@ -186,6 +192,13 @@ function GameOverOverlay({
             <span className="sc-label">Coins Collected</span>
             <span className="sc-value">🪙 {finalCoins}</span>
           </div>
+          {/* FIX: previously no explanation of what coins are or whether
+              they can be withdrawn. The contract ABI has no withdraw/redeem
+              function, so this states that plainly instead of leaving it
+              ambiguous. */}
+          <p style={{ fontSize: '12px', color: '#94a3b8', marginTop: '8px', lineHeight: 1.4 }}>
+            🪙 Coins are in-game reward points and cannot currently be withdrawn.
+          </p>
         </div>
 
         {/* Daily reward — shows prompt to connect wallet if not connected */}
@@ -195,6 +208,12 @@ function GameOverOverlay({
             <span className="dr-timer">{timeUntilNextClaim}</span>
           </div>
           <p className="dr-desc">+500 coins · Claimable once every 24 hours</p>
+          {/* FIX: clarify this claim is an on-chain transaction in itself —
+              there is no separate "withdraw" step, since none exists in the
+              contract ABI. */}
+          <p style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px', lineHeight: 1.4 }}>
+            Claiming submits an on-chain transaction directly to your wallet — no separate withdrawal step.
+          </p>
 
           {wallet.signer ? (
             <button
@@ -444,6 +463,7 @@ function RulesModal({ onClose }: RulesModalProps) {
               <div className="modal-item"><span className="modal-item-icon">◈</span><span>Connect MetaMask to unlock on-chain features</span></div>
               <div className="modal-item"><span className="modal-item-icon">📊</span><span>Save your high score permanently on-chain after each run</span></div>
               <div className="modal-item"><span className="modal-item-icon">🎁</span><span>Claim +500 coins as a daily reward once every 24 hours</span></div>
+              <div className="modal-item"><span className="modal-item-icon">🪙</span><span>Coins are in-game reward points and cannot currently be withdrawn</span></div>
               <div className="modal-item"><span className="modal-item-icon">📱</span><span>On Android, tap Connect Wallet to open in MetaMask Mobile</span></div>
             </div>
           </div>
@@ -464,7 +484,7 @@ export default function App() {
   // Keep a ref to wallet so async callbacks always read the latest value
   // without needing wallet in their useCallback dep arrays (which would
   // recreate the handlers and cause stale-closure issues in GameOverOverlay).
-  const walletRef = useRef<WalletState>({ address: null, provider: null, signer: null });
+  const walletRef = useRef<WalletState>({ address: null, provider: null, signer: null, chainId: null, networkName: null });
 
   // Screens & game state
   const [screen, setScreen]           = useState<Screen>('start');
@@ -474,7 +494,7 @@ export default function App() {
   const [isNewRecord, setIsNewRecord] = useState(false);
 
   // Wallet — kept in both state (for rendering) and ref (for async handlers)
-  const [wallet, setWalletState]       = useState<WalletState>({ address: null, provider: null, signer: null });
+  const [wallet, setWalletState]       = useState<WalletState>({ address: null, provider: null, signer: null, chainId: null, networkName: null });
   const [walletError, setWalletError]  = useState<string | null>(null);
   const [txStatus, setTxStatus]        = useState<string | null>(null);
   const [txLoading, setTxLoading]      = useState(false);
@@ -485,6 +505,21 @@ export default function App() {
     walletRef.current = w;
     setWalletState(w);
   }, []);
+
+  // ── Live network change listener ───────────────────────────────────────────
+  // FIX: previously the displayed network was a hardcoded string and never
+  // reacted to anything. This keeps wallet.networkName accurate if the user
+  // switches networks in MetaMask while the dapp stays open, without
+  // requiring a reconnect or page reload.
+  useEffect(() => {
+    const unsubscribe = subscribeToChainChanges((chainId, networkName) => {
+      // Only update if a wallet is actually connected — avoids creating a
+      // "connected" looking state from a stray chainId event.
+      if (!walletRef.current.address) return;
+      setWallet({ ...walletRef.current, chainId, networkName });
+    });
+    return unsubscribe;
+  }, [setWallet]);
 
   // Leaderboard / player
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
@@ -871,6 +906,7 @@ export default function App() {
       {wallet.address && (
         <WalletPanel
           address={wallet.address}
+          networkName={wallet.networkName}
           onDisconnect={handleDisconnectWallet}
           onCopy={handleCopyAddress}
           copyFeedback={copyFeedback}

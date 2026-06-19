@@ -18,6 +18,40 @@ export interface WalletState {
   address: string | null;
   provider: BrowserProvider | null;
   signer: JsonRpcSigner | null;
+  chainId: number | null;
+  networkName: string | null;
+}
+
+// ---- Network detection config ----
+// MetaMask (and other EIP-1193 wallets) never exposes the human-readable
+// network name a user configured locally — only the numeric chainId via
+// eth_chainId. To show a friendly label we maintain our own chainId -> name
+// map, the same way Etherscan/Chainlist do. Add custom/private chains here
+// as you support them.
+//
+// IMPORTANT: Replace the placeholder entry below with SecureChain Mainnet's
+// actual chain ID (visible in MetaMask under Settings > Networks) so it
+// displays as "SecureChain Mainnet" instead of falling back to "Chain <id>".
+export const KNOWN_NETWORKS: Record<number, string> = {
+  1: 'Ethereum Mainnet',
+  11155111: 'Sepolia Testnet',
+  137: 'Polygon Mainnet',
+  56: 'BNB Smart Chain',
+  43114: 'Avalanche C-Chain',
+  42161: 'Arbitrum One',
+  10: 'Optimism',
+  8453: 'Base',
+  // TODO: add SecureChain Mainnet's real chain ID, e.g.:
+  // 123456: 'SecureChain Mainnet',
+};
+
+/**
+ * Resolves a chainId to a human-readable network name.
+ * Falls back to "Chain <id>" (never a hardcoded/wrong network name) for any
+ * chain not yet present in KNOWN_NETWORKS.
+ */
+export function getNetworkName(chainId: number): string {
+  return KNOWN_NETWORKS[chainId] ?? `Chain ${chainId}`;
 }
 
 declare global {
@@ -114,10 +148,17 @@ export async function connectWallet(): Promise<WalletState> {
     const provider = new BrowserProvider(window.ethereum!);
     const signer = await provider.getSigner();
 
+    // Detect the ACTUAL connected chain instead of assuming Ethereum Mainnet.
+    // provider.getNetwork() reads the live chainId from the wallet.
+    const network = await provider.getNetwork();
+    const chainId = Number(network.chainId);
+
     return {
       address: accounts[0] ?? null,
       provider,
       signer,
+      chainId,
+      networkName: getNetworkName(chainId),
     };
   }
 
@@ -143,7 +184,35 @@ export async function connectWallet(): Promise<WalletState> {
 }
 
 export function disconnectWallet(): WalletState {
-  return { address: null, provider: null, signer: null };
+  return { address: null, provider: null, signer: null, chainId: null, networkName: null };
+}
+
+/**
+ * Subscribes to the wallet's 'chainChanged' event so the UI can update the
+ * displayed network name immediately when the user switches networks in
+ * MetaMask, without needing to reconnect or reload the page.
+ *
+ * Per EIP-1193, 'chainChanged' fires with the new chainId as a 0x-prefixed
+ * hex string.
+ *
+ * @param onChange - called with the new chainId (decimal) and its resolved name
+ * @returns an unsubscribe function — call this in a useEffect cleanup
+ */
+export function subscribeToChainChanges(
+  onChange: (chainId: number, networkName: string) => void
+): () => void {
+  if (typeof window === 'undefined' || !window.ethereum?.on) {
+    return () => {};
+  }
+
+  const handler = (...args: unknown[]) => {
+    const chainIdHex = args[0] as string;
+    const chainId = parseInt(chainIdHex, 16);
+    onChange(chainId, getNetworkName(chainId));
+  };
+
+  window.ethereum.on('chainChanged', handler);
+  return () => window.ethereum?.removeListener?.('chainChanged', handler);
 }
 
 export function getContract(signer: JsonRpcSigner): Contract {
