@@ -82,6 +82,18 @@ const BASE_SPEED        = 220;
 const MAX_SPEED         = 620;
 const SPEED_RAMP_PER_SEC = 4;
 
+// BALANCE FIX: how long after a run starts before obstacles can end the
+// game. During this window obstacles still spawn and move (so the lane
+// isn't empty/jarring), but collisions are ignored — giving the player a
+// genuine, unhurried look at how the game plays before any risk begins.
+const SAFE_START_SECONDS = 3;
+
+// BALANCE FIX: difficulty ramps in smoothly over this many seconds instead
+// of being at near-full intensity within the first couple of spawns. Spawn
+// interval, obstacle-vs-box ratio, and obstacle size all ease from an easy
+// starting value up to their normal value across this window.
+const DIFFICULTY_RAMP_SECONDS = 20;
+
 export class GameEngine {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -386,12 +398,29 @@ export class GameEngine {
   }
 
   private currentSpeed(): number {
-    let speed = Math.min(BASE_SPEED + this.elapsedSeconds * SPEED_RAMP_PER_SEC, MAX_SPEED);
+    // BALANCE FIX: scale the speed ramp's contribution by the difficulty
+    // ramp so the obstacle/box stream is visibly slower (more reaction
+    // time) right as risk begins, easing up to the original ramp rate by
+    // the time DIFFICULTY_RAMP_SECONDS has passed. Base speed is untouched
+    // so overall pacing past the intro window is unchanged.
+    const rampedAddition = this.elapsedSeconds * SPEED_RAMP_PER_SEC * (0.5 + 0.5 * this.difficultyRamp());
+    let speed = Math.min(BASE_SPEED + rampedAddition, MAX_SPEED);
     const now = performance.now();
     if (now < this.state.speedBoostUntil) speed *= 1.6;
     if (now < this.state.slowUntil)       speed *= 0.5;
     if (now < this.state.freezeUntil)     speed  = 0;
     return speed;
+  }
+
+  // BALANCE FIX: 0 → 1 progress through the opening difficulty ramp,
+  // counted from the moment the safe-start window ends (so the player's
+  // first real seconds of risk are also the easiest ones, not just the
+  // ones during the collision-free grace period). Eased with a smoothstep
+  // curve so difficulty climbs gradually rather than linearly/abruptly.
+  private difficultyRamp(): number {
+    const sinceRiskStarted = Math.max(0, this.elapsedSeconds - SAFE_START_SECONDS);
+    const t = Math.min(1, sinceRiskStarted / DIFFICULTY_RAMP_SECONDS);
+    return t * t * (3 - 2 * t); // smoothstep
   }
 
   /** PERF FIX: shadowBlur is one of the most expensive Canvas2D operations
@@ -480,8 +509,14 @@ export class GameEngine {
     }
 
     // Spawn entities
+    // BALANCE FIX: spawn interval now starts noticeably slower
+    // (0.45s → was effectively reachable within ~65s; intro now starts at
+    // 1.6s) and only eases down to the original 1.1s→0.45s curve once the
+    // difficulty ramp has progressed, instead of being fast from second one.
     this.spawnTimer += delta;
-    const spawnInterval = Math.max(0.45, 1.1 - this.elapsedSeconds * 0.01);
+    const introInterval = 1.6;
+    const baseInterval  = Math.max(0.45, 1.1 - this.elapsedSeconds * 0.01);
+    const spawnInterval = introInterval + (baseInterval - introInterval) * this.difficultyRamp();
     if (this.spawnTimer >= spawnInterval) {
       this.spawnTimer = 0;
       this.spawnEntity();
@@ -517,12 +552,24 @@ export class GameEngine {
     // they appear, even on small canvas heights.
     const spawnY = -80;
 
-    if (roll < 0.55) {
+    // BALANCE FIX: obstacle chance eases from a low intro value up to the
+    // original 55% as the difficulty ramp progresses, so the player meets
+    // mostly (harmless-to-miss) mystery boxes at first and obstacles become
+    // common only once they've had time to learn the controls.
+    const introObstacleChance = 0.25;
+    const baseObstacleChance  = 0.55;
+    const obstacleChance = introObstacleChance + (baseObstacleChance - introObstacleChance) * this.difficultyRamp();
+
+    if (roll < obstacleChance) {
       const type = OBSTACLE_TYPES[Math.floor(Math.random() * OBSTACLE_TYPES.length)];
+      // BALANCE FIX: obstacles are visually/physically slightly smaller
+      // during the intro ramp (easier to dodge / less likely to clip a
+      // lane-edge graze), growing to their normal size as difficulty ramps.
+      const sizeT = 0.8 + 0.2 * this.difficultyRamp();
       this.obstacles.push({
         lane, y: spawnY,
-        width:  this.laneWidth * 0.6,
-        height: 50,
+        width:  this.laneWidth * 0.6 * sizeT,
+        height: 50 * sizeT,
         type,
         wobble: 0,
       });
@@ -540,23 +587,38 @@ export class GameEngine {
   }
 
   private handleCollisions(): void {
-    // DEFENSIVE FIX: Never allow a collision to register before the player
-    // has had a grace period after a run starts. This is a critical line of
-    // defense against the WIPEOUT bug — if any layout change causes a
-    // degenerate canvas height, players always get a safe window.
-    // Increased from 0.3s to 0.5s for extra safety on slow-layout devices.
-    if (this.elapsedSeconds < 0.5) return;
+    // BALANCE FIX: no collision can register until SAFE_START_SECONDS (3s)
+    // have elapsed since the run began. Obstacles still spawn and move
+    // during this window so the screen isn't empty, but they are completely
+    // harmless until the safe-start window ends — replaces the previous
+    // 0.5s grace period, which was too short to count as a real safe start.
+    if (this.elapsedSeconds < SAFE_START_SECONDS) return;
 
     // Safety check: if playerY is unrealistically small (layout not settled),
     // skip collision detection entirely for this frame.
     if (this.playerY < 50) return;
 
+    // BALANCE FIX (fairer hitboxes): previously any obstacle/box sharing the
+    // player's lane counted as a vertical-only overlap check — i.e. the
+    // *entire lane width* was treated as solid, so even an obstacle drawn
+    // near the lane's edge (visually not touching the player) would trigger
+    // a hit. Collision now also checks horizontal overlap using each
+    // entity's real on-screen width, shrunk by COLLISION_FORGIVENESS so the
+    // hitbox is comfortably smaller than the visible sprite — a clear,
+    // actual overlap is required, not just "same lane."
+    const COLLISION_FORGIVENESS = 0.6; // fraction of visual size that counts as solid
+    const playerHalfW  = (this.laneWidth * 0.5) * COLLISION_FORGIVENESS;
     const playerTop    = this.playerY - 40;
     const playerBottom = this.playerY + 40;
 
     for (const ob of this.obstacles) {
       if (ob.lane !== this.playerLane) continue;
-      if (ob.y + ob.height / 2 >= playerTop && ob.y - ob.height / 2 <= playerBottom) {
+      const verticalOverlap = ob.y + ob.height / 2 >= playerTop && ob.y - ob.height / 2 <= playerBottom;
+      if (!verticalOverlap) continue;
+      const obHalfW = (ob.width / 2) * COLLISION_FORGIVENESS;
+      const obX     = this.laneCenter(ob.lane);
+      const horizontalOverlap = Math.abs(obX - this.playerX) <= (obHalfW + playerHalfW);
+      if (horizontalOverlap) {
         this.onObstacleHit(ob);
         ob.y = this.height + ob.height; // remove from active play
       }
@@ -564,16 +626,19 @@ export class GameEngine {
 
     for (const box of this.boxes) {
       if (box.lane !== this.playerLane) continue;
-      if (box.y + box.height / 2 >= playerTop && box.y - box.height / 2 <= playerBottom) {
-        this.spawnCollectEffect(
-          this.laneCenter(box.lane),
-          box.y,
-          this.boxGlowColor(box.type),
-          box.type === 'coins' ? 'coin' : 'spark'
-        );
-        this.onBoxCollected(box);
-        box.y = this.height + box.height;
-      }
+      const verticalOverlap = box.y + box.height / 2 >= playerTop && box.y - box.height / 2 <= playerBottom;
+      if (!verticalOverlap) continue;
+      // Boxes keep generous (full-lane-width) pickup detection — being
+      // lenient about collecting a reward box is good for the player, only
+      // obstacle damage needed the fairness fix.
+      this.spawnCollectEffect(
+        this.laneCenter(box.lane),
+        box.y,
+        this.boxGlowColor(box.type),
+        box.type === 'coins' ? 'coin' : 'spark'
+      );
+      this.onBoxCollected(box);
+      box.y = this.height + box.height;
     }
   }
 
