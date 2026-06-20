@@ -1,8 +1,49 @@
 import { BrowserProvider, Contract, JsonRpcSigner } from 'ethers';
 
 // ---- Smart contract config ----
-// Replace this with the deployed contract address after running the Hardhat deploy script.
-export const CONTRACT_ADDRESS = '0x0000000000000000000000000000000000000000';
+//
+// CRITICAL: no reward contract is deployed yet. CONTRACT_ADDRESS is the
+// Ethereum zero address — a structural placeholder, not a real contract.
+// It has no code at it on any network, so any transaction sent to it is
+// not "claiming a reward": it either reverts or (for a plain ETH-value
+// call) just burns the sender's gas with no effect. Anyone who approves
+// such a transaction in MetaMask is needlessly paying gas for nothing.
+//
+// Replace this with the real deployed contract address after running the
+// Hardhat deploy script — do not remove the ZERO_ADDRESS guard below when
+// you do, since it protects against this placeholder ever being live
+// again by accident (e.g. a bad env var, a reverted deploy, etc).
+export const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+export const CONTRACT_ADDRESS = ZERO_ADDRESS;
+
+// Single source of truth for "is there actually a contract to talk to?".
+// Every on-chain call (saveScoreOnChain, claimRewardOnChain,
+// getPlayerScoreOnChain, canClaimOnChain) checks this BEFORE constructing
+// or sending anything, so a placeholder address can never reach
+// window.ethereum / MetaMask in the first place.
+export function isContractDeployed(): boolean {
+  return CONTRACT_ADDRESS.toLowerCase() !== ZERO_ADDRESS.toLowerCase();
+}
+
+// Exported so the UI layer can show an accurate, permanent informational
+// message (e.g. on the Daily Reward card) without needing to trigger a
+// failed transaction first to find out the contract isn't live.
+export const REWARD_CONTRACT_DEPLOYED = isContractDeployed();
+
+// Thrown by every on-chain call below when no contract is deployed.
+// Distinct `code` so callers (App.tsx) can show a clear, non-alarming
+// "this feature isn't live yet" message instead of a generic tx-failed
+// error — and so they never need to inspect the address themselves.
+export class ContractNotDeployedError extends Error {
+  code = 'CONTRACT_NOT_DEPLOYED' as const;
+  constructor(action: string) {
+    super(
+      `${action} is not available yet — no reward contract has been deployed. ` +
+      `This is expected: on-chain rewards are disabled until a real contract address replaces the placeholder.`
+    );
+    this.name = 'ContractNotDeployedError';
+  }
+}
 
 export const CONTRACT_ABI = [
   'function saveScore(uint256 score) external',
@@ -242,7 +283,19 @@ export function subscribeToChainChanges(
   return () => window.ethereum?.removeListener?.('chainChanged', handler);
 }
 
+/**
+ * Builds the reward contract instance for read/write calls.
+ *
+ * SAFETY: throws ContractNotDeployedError instead of returning a Contract
+ * bound to the zero address. This is the last line of defense — even if a
+ * future call site forgets to check isContractDeployed() first, it's
+ * structurally impossible to get a usable Contract object pointed at
+ * CONTRACT_ADDRESS while it's still the zero address.
+ */
 export function getContract(signer: JsonRpcSigner): Contract {
+  if (!isContractDeployed()) {
+    throw new ContractNotDeployedError('Reward contract access');
+  }
   return new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
 }
 
@@ -257,12 +310,13 @@ export function getContract(signer: JsonRpcSigner): Contract {
  * instead of having to duplicate these checks.
  */
 export type TxErrorKind =
-  | 'rejected'      // user pressed Reject in wallet
-  | 'reverted'      // contract reverted (e.g. canClaim returned false)
-  | 'funds'         // not enough ETH for gas
-  | 'network'       // RPC connectivity issue
-  | 'timeout'       // tx.wait() timed out
-  | 'unknown';      // anything else
+  | 'rejected'        // user pressed Reject in wallet
+  | 'reverted'        // contract reverted (e.g. canClaim returned false)
+  | 'funds'           // not enough ETH for gas
+  | 'network'         // RPC connectivity issue
+  | 'timeout'         // tx.wait() timed out
+  | 'not-deployed'    // CONTRACT_ADDRESS is still the zero-address placeholder
+  | 'unknown';        // anything else
 
 export interface TxError {
   kind: TxErrorKind;
@@ -274,6 +328,15 @@ export function classifyTxError(err: unknown): TxError {
   const code: unknown    = e?.code;
   const msg: string      = (e?.message ?? e?.reason ?? String(err)).toLowerCase();
   const info: string     = JSON.stringify(e?.info ?? e?.data ?? '').toLowerCase();
+
+  // ── Contract not deployed ──────────────────────────────────────────────────
+  // Checked first and matched on the typed `code`, not message-sniffing, so
+  // this can never be misclassified as a generic failure — the whole point
+  // is that the UI shows "this feature isn't live yet", not "transaction
+  // failed, try again" (which would invite a pointless retry).
+  if (code === 'CONTRACT_NOT_DEPLOYED') {
+    return { kind: 'not-deployed', message: e.message as string };
+  }
 
   // ── User rejected ──────────────────────────────────────────────────────────
   // Ethers v6: ACTION_REJECTED  |  EIP-1193 legacy: 4001
@@ -397,6 +460,12 @@ async function waitForTx(
 }
 
 export async function saveScoreOnChain(signer: JsonRpcSigner, score: number): Promise<string> {
+  // GUARD: checked here, before getContract()/any ethers call, so this
+  // rejects synchronously and MetaMask's "Confirm transaction" popup is
+  // never triggered for a placeholder address.
+  if (!isContractDeployed()) {
+    throw new ContractNotDeployedError('Saving your score on-chain');
+  }
   const contract = getContract(signer);
   // contract.saveScore() submits the transaction and returns a response object.
   // waitForTx() then waits for the on-chain confirmation with a 60 s timeout.
@@ -405,6 +474,13 @@ export async function saveScoreOnChain(signer: JsonRpcSigner, score: number): Pr
 }
 
 export async function claimRewardOnChain(signer: JsonRpcSigner): Promise<string> {
+  // GUARD: this is the exact call path responsible for the reported issue
+  // — MetaMask popping up a transaction targeting the zero address. Checked
+  // here, before getContract()/any ethers call, so it rejects synchronously
+  // and no signing prompt is ever shown for a placeholder address.
+  if (!isContractDeployed()) {
+    throw new ContractNotDeployedError('Claiming your reward');
+  }
   const contract = getContract(signer);
   // contract.claimReward() submits the transaction and returns a response object.
   // waitForTx() then waits for the on-chain confirmation with a 60 s timeout.
@@ -413,12 +489,25 @@ export async function claimRewardOnChain(signer: JsonRpcSigner): Promise<string>
 }
 
 export async function getPlayerScoreOnChain(signer: JsonRpcSigner, address: string): Promise<number> {
+  // GUARD: a view call against an address with no contract code doesn't
+  // open MetaMask, but it does throw an opaque "could not decode result"
+  // style error from the RPC node. Fail fast with a clear, typed error
+  // instead, so callers can treat this the same way as the write calls.
+  if (!isContractDeployed()) {
+    throw new ContractNotDeployedError('Reading your on-chain score');
+  }
   const contract = getContract(signer);
   const score: bigint = await contract.getPlayerScore(address) as bigint;
   return Number(score);
 }
 
 export async function canClaimOnChain(signer: JsonRpcSigner, address: string): Promise<boolean> {
+  // GUARD: same reasoning as getPlayerScoreOnChain — fail fast and clearly
+  // rather than letting an RPC call against the zero address surface a
+  // confusing low-level decode error up to the UI.
+  if (!isContractDeployed()) {
+    throw new ContractNotDeployedError('Checking reward eligibility');
+  }
   const contract = getContract(signer);
   return await contract.canClaim(address) as boolean;
 }
