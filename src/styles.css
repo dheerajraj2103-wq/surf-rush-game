@@ -1046,6 +1046,38 @@ body {
   box-shadow: 0 6px 28px rgba(16, 185, 129, 0.55);
 }
 
+/* UX FIX (reviewer C — action hierarchy): Surf Again is the expected,
+   low-friction next step, so it gets a clear but visually quieter outline
+   treatment — present and easy to find, but not competing with Claim
+   Reward for attention. */
+.secondary-action {
+  background: var(--glass-2);
+  border: 1px solid var(--border-2);
+  color: var(--text-primary);
+}
+
+.secondary-action:hover:not(:disabled) {
+  background: var(--glass-3);
+  border-color: var(--border-cyan);
+  transform: translateY(-1px);
+}
+
+/* UX FIX (reviewer C — action hierarchy): Share is the lowest-priority of
+   the three primary actions — quiet text-on-glass treatment, no border, no
+   shadow, so it doesn't visually compete with Claim or Surf Again. */
+.tertiary-action {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  padding-top: 11px;
+  padding-bottom: 11px;
+}
+
+.tertiary-action:hover:not(:disabled) {
+  color: #7dd3fc;
+  background: rgba(0, 136, 204, 0.1);
+}
+
 .telegram-action {
   background: rgba(0, 136, 204, 0.15);
   border: 1px solid rgba(0, 136, 204, 0.4);
@@ -1074,6 +1106,40 @@ body {
 
 .wallet-action:hover:not(:disabled) {
   background: rgba(56, 189, 248, 0.22);
+}
+
+/* UX FIX (reviewer C — action hierarchy): Save Score On-Chain is preserved
+   in full (it's a real working feature) but demoted below the three
+   primary actions as a small link-style control, since it wasn't part of
+   the Claim / Surf Again / Share hierarchy the reviewer specified and
+   shouldn't visually compete with it. */
+.gameover-secondary-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: -2px;
+}
+
+.link-action {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 6px 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: var(--t-fast);
+}
+
+.link-action:hover:not(:disabled) {
+  color: var(--amber);
+}
+
+.link-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Spinner */
@@ -1348,6 +1414,33 @@ body {
   .wallet-panel { gap: 10px; }
   .wallet-panel-actions { flex-wrap: wrap; }
   .modal-content { padding: 18px 18px 22px; }
+
+  /* MOBILE FIX (reviewer E — Android/MetaMask Mobile): on very narrow
+     viewports the topbar previously kept brand + How to Play + wallet
+     error chip + Connect button all on one flex row, which on phones
+     ~360px wide (common on Android/MetaMask Mobile's in-app browser)
+     pushed the Connect button hard against the inline error text. Letting
+     the right-hand cluster take its own full-width row keeps every control
+     comfortably tappable and never visually overlapping. */
+  .topbar {
+    flex-wrap: wrap;
+  }
+  .topbar-right {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .wallet-error-inline {
+    max-width: none;
+    flex: 1 1 auto;
+  }
+
+  /* MOBILE FIX: when the wallet panel's action buttons wrap to their own
+     line on a narrow screen, stretch them to fill the row evenly instead
+     of leaving them left-aligned with empty space beside the address. */
+  .wallet-panel-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
 }
 
 /* ─────────────────────────────────────────────

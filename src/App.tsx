@@ -15,7 +15,9 @@ import {
   saveScoreOnChain,
   claimRewardOnChain,
   subscribeToChainChanges,
-  WalletState
+  WalletState,
+  TxPhase,
+  TX_PHASE_LABEL
 } from './wallet';
 import { initTelegram, getTelegramUser, shareScore } from './telegram';
 
@@ -147,7 +149,8 @@ interface GameOverOverlayProps {
   timeUntilNextClaim: string;
   canClaimReward: boolean;
   txLoading: boolean;
-  txStatus: string | null;
+  txPhase: TxPhase;
+  txMessage: string | null;
   // Pass the full wallet state so handlers are never stale
   wallet: WalletState;
   onRestart: () => void;
@@ -164,7 +167,8 @@ function GameOverOverlay({
   timeUntilNextClaim,
   canClaimReward,
   txLoading,
-  txStatus,
+  txPhase,
+  txMessage,
   wallet,
   onRestart,
   onShare,
@@ -172,6 +176,17 @@ function GameOverOverlay({
   onConnectWallet,
   onClaimReward,
 }: GameOverOverlayProps) {
+  // BUGFIX (root cause #3 — unclear action hierarchy): txStatus used to be a
+  // single string the caller had to sniff with .startsWith('✅'/'⏳'/'❌') to
+  // pick a CSS class. txPhase is now an explicit enum, so the status banner's
+  // styling and copy are derived directly from state instead of parsing text.
+  const statusClass =
+    txPhase === 'confirmed' ? 'tx-success' :
+    txPhase === 'failed'    ? 'tx-error'   :
+    (txPhase === 'awaiting-approval' || txPhase === 'submitted') ? 'tx-pending' :
+    '';
+  const statusLabel = TX_PHASE_LABEL[txPhase];
+
   return (
     <div className="overlay gameover-overlay">
       <div className="gameover-modal">
@@ -214,47 +229,55 @@ function GameOverOverlay({
           <p style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px', lineHeight: 1.4 }}>
             Claiming submits an on-chain transaction directly to your wallet — no separate withdrawal step.
           </p>
+        </div>
 
+        {/* UX FIX (reviewer C — clear action hierarchy):
+            1. Claim Reward  — primary   (dominant green, top)
+            2. Surf Again    — secondary (neutral outline, middle)
+            3. Share         — tertiary  (quiet text-style, bottom)
+            Save Score On-Chain is preserved in full but demoted to a small
+            link-style action beneath the three primary actions — it's a
+            real, working feature (per "preserve all reward functionality")
+            but was never one of the three hierarchy items the reviewer
+            asked for, so it shouldn't visually compete with them. */}
+        <div className="gameover-actions">
           {wallet.signer ? (
             <button
-              className="action-btn chain-action"
-              style={{ marginTop: '8px' }}
+              className="action-btn primary-action"
               onClick={onClaimReward}
               type="button"
               disabled={txLoading || !canClaimReward}
             >
               {txLoading
-                ? <span className="spinner" />
+                ? <><span className="spinner" /> {statusLabel || 'Working…'}</>
                 : canClaimReward
-                  ? '🎁 Claim Daily Reward'
+                  ? '🎁 Claim Reward'
                   : `⏳ Next claim in ${timeUntilNextClaim}`}
             </button>
           ) : (
-            // Wallet not connected — show inline connect prompt instead of silently failing
             <button
-              className="action-btn wallet-action"
-              style={{ marginTop: '8px' }}
+              className="action-btn primary-action"
               onClick={onConnectWallet}
               type="button"
               disabled={txLoading}
             >
-              {txLoading ? <span className="spinner" /> : '◈ Connect Wallet to Claim'}
+              {txLoading ? <><span className="spinner" /> {statusLabel || 'Connecting…'}</> : '◈ Connect Wallet to Claim'}
             </button>
           )}
-        </div>
 
-        <div className="gameover-actions">
-          <button className="action-btn primary-action" onClick={onRestart} type="button">
+          <button className="action-btn secondary-action" onClick={onRestart} type="button">
             ↺ Surf Again
           </button>
 
-          <button className="action-btn telegram-action" onClick={onShare} type="button">
+          <button className="action-btn tertiary-action" onClick={onShare} type="button">
             📲 Share on Telegram
           </button>
+        </div>
 
+        <div className="gameover-secondary-actions">
           {wallet.signer ? (
             <button
-              className="action-btn chain-action"
+              className="link-action"
               onClick={onSaveOnChain}
               type="button"
               disabled={txLoading}
@@ -263,7 +286,7 @@ function GameOverOverlay({
             </button>
           ) : (
             <button
-              className="action-btn wallet-action"
+              className="link-action"
               onClick={onConnectWallet}
               type="button"
               disabled={txLoading}
@@ -273,13 +296,12 @@ function GameOverOverlay({
           )}
         </div>
 
-        {txStatus && (
-          <div className={`tx-status ${
-            txStatus.startsWith('✅') ? 'tx-success' :
-            txStatus.startsWith('⏳') ? 'tx-pending' :
-            'tx-error'
-          }`}>
-            {txStatus}
+        {txPhase !== 'idle' && (txMessage || statusLabel) && (
+          <div className={`tx-status ${statusClass}`}>
+            {txPhase === 'awaiting-approval' || txPhase === 'submitted'
+              ? <span className="spinner" style={{ width: 12, height: 12, borderWidth: 2, marginRight: 6, verticalAlign: 'middle' }} />
+              : null}
+            {txMessage || statusLabel}
           </div>
         )}
       </div>
@@ -496,8 +518,29 @@ export default function App() {
   // Wallet — kept in both state (for rendering) and ref (for async handlers)
   const [wallet, setWalletState]       = useState<WalletState>({ address: null, provider: null, signer: null, chainId: null, networkName: null });
   const [walletError, setWalletError]  = useState<string | null>(null);
-  const [txStatus, setTxStatus]        = useState<string | null>(null);
-  const [txLoading, setTxLoading]      = useState(false);
+
+  // BUGFIX (root cause #1 — "wallet modal re-triggering" / status bleeding
+  // across screens): connect-wallet status and on-chain-transaction status
+  // used to share a single `txStatus` string + `txLoading` boolean. That
+  // meant leftover "Connecting…" text from the topbar button could still be
+  // visible when the user reached the Game Over screen's Claim/Save buttons
+  // (and vice versa), which read as the wallet prompt mysteriously
+  // reappearing. They're now fully separate state so neither flow can leak
+  // into the other's UI.
+  const [connectPhase, setConnectPhase] = useState<TxPhase>('idle');
+  const [txPhase, setTxPhase]           = useState<TxPhase>('idle');
+  const [txMessage, setTxMessage]       = useState<string | null>(null); // human-readable detail for the current txPhase (success hash, error reason, etc.)
+  const connectLoading = connectPhase === 'connecting-wallet' || connectPhase === 'awaiting-approval';
+  const txLoading      = txPhase === 'awaiting-approval' || txPhase === 'submitted';
+
+  // BUGFIX (root cause #2 — "stuck"/inconsistent loading on double-tap):
+  // refs (not state) so a fast double-click/double-tap can be rejected
+  // synchronously, before React even re-renders to disable the button.
+  // Using state for this guard would still allow a second click to slip in
+  // during the brief window before the disabled prop takes visual effect.
+  const connectInFlightRef = useRef(false);
+  const txInFlightRef      = useRef(false);
+
   const [copyFeedback, setCopyFeedback] = useState(false);
 
   /** Sets wallet in both state and ref so async handlers are never stale. */
@@ -673,8 +716,15 @@ export default function App() {
   // ── Game actions ───────────────────────────────────────────────────────────
   const startGame = useCallback(() => {
     setScreen('playing');
-    setTxStatus(null);
-    setTxLoading(false); // FIX: always reset loading state on new game
+    // FIX: reset BOTH phase trackers on a new game. Previously only
+    // txPhase was cleared here — connectPhase from an earlier successful
+    // "Wallet connected" could still read 'confirmed' on a later Game Over
+    // screen with no live txPhase to take priority, so the stale
+    // "connected" status text/banner would resurface from a prior run.
+    setTxPhase('idle');
+    setConnectPhase('idle');
+    setTxMessage(null);
+    txInFlightRef.current = false;
     // FIX: defer engine.start() by one rAF so the 'playing' screen state
     // has been committed to the DOM and the game-area div has its final
     // layout dimensions before resize() runs inside start(). Without this,
@@ -688,8 +738,12 @@ export default function App() {
 
   const restartGame = useCallback(() => {
     setScreen('playing');
-    setTxStatus(null);
-    setTxLoading(false); // FIX: always reset loading state on restart
+    // FIX: same as startGame — clear both phase trackers so no stale
+    // connect-flow status can resurface on the next Game Over screen.
+    setTxPhase('idle');
+    setConnectPhase('idle');
+    setTxMessage(null);
+    txInFlightRef.current = false;
     // FIX: same deferred-start fix as startGame — wait one rAF so the
     // gameover overlay is unmounted and the game-area has correct dimensions.
     requestAnimationFrame(() => {
@@ -703,8 +757,17 @@ export default function App() {
 
   // ── Wallet actions ─────────────────────────────────────────────────────────
   const handleConnectWallet = useCallback(async () => {
+    // BUGFIX (root cause #2 — duplicate wallet prompts / stuck loading):
+    // reject re-entrant calls synchronously via a ref, not state, so a fast
+    // double-click/double-tap on "Connect Wallet" can never fire a second
+    // eth_requestAccounts while the first is still pending. Two concurrent
+    // requests racing against the wallet is what previously produced
+    // inconsistent / seemingly-stuck loading state.
+    if (connectInFlightRef.current) return;
+    connectInFlightRef.current = true;
+
     setWalletError(null);
-    setTxStatus(null);
+    setTxMessage(null);
 
     // FIX: Do NOT gate on isMetaMaskAvailable() here anymore.
     // connectWallet() in wallet.ts now handles the three cases:
@@ -714,25 +777,26 @@ export default function App() {
     // We only need to show loading state and handle the result.
 
     try {
-      setTxLoading(true);
+      setConnectPhase('connecting-wallet');
 
       // Show different message depending on platform
       if (!isInjectedWalletAvailable() && isMobileDevice()) {
-        setTxStatus('⏳ Opening MetaMask Mobile…');
+        setTxMessage('Opening MetaMask Mobile…');
       } else {
-        setTxStatus('⏳ Requesting wallet access…');
+        setTxMessage('Requesting wallet access…');
+        setConnectPhase('awaiting-approval');
       }
 
       const connected = await connectWallet();
       setWallet(connected);
       setWalletError(null);
-      setTxStatus(`✅ ${getWalletName()} connected: ${shortenAddress(connected.address!)}`);
+      setConnectPhase('confirmed');
+      setTxMessage(`${getWalletName()} connected: ${shortenAddress(connected.address!)}`);
     } catch (err: any) {
       // Deep-link redirect: the page is about to navigate away, show a friendly message
       if (err.code === 'DEEPLINK_REDIRECT') {
-        setTxStatus('📱 Opening MetaMask Mobile… return here after connecting.');
-        // Don't show as error — the redirect is intentional
-        setTxLoading(false);
+        setConnectPhase('idle'); // not a failure — the redirect is intentional
+        setTxMessage('Opening MetaMask Mobile… return here after connecting.');
         return;
       }
 
@@ -740,8 +804,8 @@ export default function App() {
       if (err.code === 'NO_WALLET') {
         const msg = err.message;
         setWalletError(msg);
-        setTxStatus(`❌ ${msg}`);
-        setTxLoading(false);
+        setConnectPhase('failed');
+        setTxMessage(msg);
         return;
       }
 
@@ -755,23 +819,29 @@ export default function App() {
       ) {
         const msg = 'Connection cancelled. Tap "Connect Wallet" to try again.';
         setWalletError(msg);
-        setTxStatus(`❌ ${msg}`);
-        setTxLoading(false);
+        setConnectPhase('failed');
+        setTxMessage(msg);
         return;
       }
 
       // Generic fallback
       const msg = err instanceof Error ? err.message : 'Failed to connect wallet.';
       setWalletError(msg);
-      setTxStatus(`❌ ${msg}`);
+      setConnectPhase('failed');
+      setTxMessage(msg);
     } finally {
-      setTxLoading(false);
+      // FIX: this always runs, on every exit path (success, every early
+      // return, and the generic catch), so the in-flight guard and any
+      // lingering "Connecting…" UI can never get permanently stuck.
+      connectInFlightRef.current = false;
     }
   }, [setWallet]);
 
   const handleDisconnectWallet = useCallback(() => {
     setWallet(disconnectWallet());
-    setTxStatus(null);
+    setConnectPhase('idle');
+    setTxPhase('idle');
+    setTxMessage(null);
     setWalletError(null);
   }, [setWallet]);
 
@@ -788,24 +858,39 @@ export default function App() {
   // works immediately after connectWallet() resolves, even though the
   // GameOverOverlay received the handler before the wallet was connected.
   const handleSaveScoreOnChain = useCallback(async () => {
+    // BUGFIX (root cause #2): guard against a double-tap firing two
+    // saveScoreOnChain transactions back to back.
+    if (txInFlightRef.current) return;
+
     const signer = walletRef.current.signer;
     if (!signer) {
-      setTxStatus('❌ Connect your wallet first, then save your score.');
+      setTxPhase('failed');
+      setTxMessage('Connect your wallet first, then save your score.');
       return;
     }
+
+    txInFlightRef.current = true;
     try {
-      setTxLoading(true);
-      setTxStatus('Saving score on-chain… approve in your wallet.');
+      setTxPhase('awaiting-approval');
+      setTxMessage('Approve the transaction in your wallet…');
       const hash = await saveScoreOnChain(signer, finalScore);
-      setTxStatus(`✅ Score saved! Tx: ${shortenAddress(hash)}`);
+      setTxPhase('submitted');
+      setTxMessage(`Transaction submitted: ${shortenAddress(hash)}`);
+      // saveScoreOnChain() already awaits confirmation (see wallet.ts
+      // waitForTx), so by the time we reach here it's actually confirmed.
+      setTxPhase('confirmed');
+      setTxMessage(`Score saved on-chain! Tx: ${shortenAddress(hash)}`);
     } catch (err: any) {
+      setTxPhase('failed');
       if (err.code === 4001 || err.message?.includes('rejected') || err.message?.includes('denied') || err.message?.includes('User rejected')) {
-        setTxStatus('❌ Transaction cancelled.');
+        setTxMessage('Transaction cancelled.');
       } else {
-        setTxStatus(`❌ ${err.message || 'Transaction failed.'}`);
+        setTxMessage(err.message || 'Transaction failed.');
       }
     } finally {
-      setTxLoading(false);
+      // FIX: guarantees the in-flight guard always clears and the spinner
+      // never gets permanently stuck, regardless of which path was taken.
+      txInFlightRef.current = false;
     }
   }, [finalScore]); // finalScore is the only value not in a ref
 
@@ -815,36 +900,53 @@ export default function App() {
   useEffect(() => { canClaimRewardRef.current = canClaimReward; }, [canClaimReward]);
 
   const handleClaimReward = useCallback(async () => {
+    // BUGFIX (root cause #2): guard against a double-tap firing two
+    // claimRewardOnChain transactions back to back — without this, a fast
+    // double-click could submit two on-chain claims before the first
+    // resolves and disabled the button.
+    if (txInFlightRef.current) return;
+
     const signer = walletRef.current.signer;
 
     if (!signer) {
-      // User clicked "Claim Daily Reward" without a wallet connected.
+      // User clicked "Claim Reward" without a wallet connected.
       // Show clear in-modal feedback instead of silently failing.
-      setTxStatus('❌ Connect your wallet first, then claim your reward.');
+      setTxPhase('failed');
+      setTxMessage('Connect your wallet first, then claim your reward.');
       return;
     }
 
     if (!canClaimRewardRef.current) {
-      setTxStatus('❌ Daily reward already claimed. Check back in 24 hours.');
+      setTxPhase('failed');
+      setTxMessage('Daily reward already claimed. Check back in 24 hours.');
       return;
     }
 
+    txInFlightRef.current = true;
     try {
-      setTxLoading(true);
-      setTxStatus('Waiting for wallet approval… approve in your wallet.');
+      setTxPhase('awaiting-approval');
+      setTxMessage('Approve the transaction in your wallet…');
       const hash = await claimRewardOnChain(signer);
+      setTxPhase('submitted');
+      setTxMessage(`Transaction submitted: ${shortenAddress(hash)}`);
       const now  = Date.now();
       localStorage.setItem('surfRushLastClaim', String(now));
       setLastClaimTime(now);
-      setTxStatus(`✅ Reward claimed! Tx: ${shortenAddress(hash)}`);
+      // claimRewardOnChain() already awaits confirmation (see wallet.ts
+      // waitForTx), so by the time we reach here it's actually confirmed.
+      setTxPhase('confirmed');
+      setTxMessage(`Reward claimed! Tx: ${shortenAddress(hash)}`);
     } catch (err: any) {
+      setTxPhase('failed');
       if (err.code === 4001 || err.message?.includes('rejected') || err.message?.includes('denied') || err.message?.includes('User rejected')) {
-        setTxStatus('❌ Transaction cancelled.');
+        setTxMessage('Transaction cancelled.');
       } else {
-        setTxStatus('❌ Transaction failed. Please try again.');
+        setTxMessage('Transaction failed. Please try again.');
       }
     } finally {
-      setTxLoading(false);
+      // FIX: guarantees the in-flight guard always clears and the spinner
+      // never gets permanently stuck, regardless of which path was taken.
+      txInFlightRef.current = false;
     }
   }, []); // no deps — reads everything from refs
 
@@ -892,8 +994,14 @@ export default function App() {
               {shortenAddress(wallet.address)}
             </button>
           ) : (
-            <button className="wallet-btn" onClick={handleConnectWallet} type="button" disabled={txLoading}>
-              {txLoading
+            // BUGFIX (root cause #1): this used to read the shared
+            // `txLoading` flag, so it would show "Connecting…" and disable
+            // itself whenever a Claim/Save transaction was in flight on the
+            // Game Over screen — completely unrelated to wallet connection.
+            // It now reads `connectLoading`, which is scoped only to the
+            // connect-wallet flow.
+            <button className="wallet-btn" onClick={handleConnectWallet} type="button" disabled={connectLoading}>
+              {connectLoading
                 ? <><span className="spinner" style={{ width: 12, height: 12, borderWidth: 2 }} /> Connecting…</>
                 : <><span className="wallet-icon">◈</span> Connect Wallet</>
               }
@@ -950,8 +1058,13 @@ export default function App() {
             isNewRecord={isNewRecord}
             timeUntilNextClaim={timeUntilNextClaim}
             canClaimReward={canClaimReward}
-            txLoading={txLoading}
-            txStatus={txStatus}
+            // The Game Over screen's "Connect Wallet to Claim/Save" buttons
+            // can trigger the connect flow, and its "Claim"/"Save" buttons
+            // trigger the tx flow — show whichever of the two is actually
+            // active right now, rather than mixing them into one flag.
+            txLoading={connectLoading || txLoading}
+            txPhase={txPhase !== 'idle' ? txPhase : connectPhase}
+            txMessage={txMessage}
             wallet={wallet}
             onRestart={restartGame}
             onShare={handleShareScore}

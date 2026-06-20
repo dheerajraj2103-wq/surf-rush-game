@@ -22,6 +22,33 @@ export interface WalletState {
   networkName: string | null;
 }
 
+// ---- Transaction / connection phase tracking ----
+// BUGFIX: previously App.tsx tracked wallet-connect status and on-chain tx
+// status in the same free-form `txStatus: string | null` field, shared
+// across the topbar "Connect Wallet" button AND the Game Over screen's
+// "Claim Reward" / "Save Score" buttons. That meant leftover status text
+// from one flow (e.g. "Connecting…") could still be showing when the user
+// moved to a completely different part of the UI, looking like a stuck or
+// re-triggered prompt. TxPhase gives each flow its own small, exhaustive
+// state machine instead of a shared string, so a phase from one flow can
+// never bleed into another's UI.
+export type TxPhase =
+  | 'idle'
+  | 'connecting-wallet'
+  | 'awaiting-approval'
+  | 'submitted'
+  | 'confirmed'
+  | 'failed';
+
+export const TX_PHASE_LABEL: Record<TxPhase, string> = {
+  'idle':              '',
+  'connecting-wallet': 'Connecting Wallet…',
+  'awaiting-approval': 'Waiting for Approval…',
+  'submitted':         'Transaction Submitted…',
+  'confirmed':         'Transaction Confirmed',
+  'failed':            'Transaction Failed',
+};
+
 // ---- Network detection config ----
 // MetaMask (and other EIP-1193 wallets) never exposes the human-readable
 // network name a user configured locally — only the numeric chainId via
