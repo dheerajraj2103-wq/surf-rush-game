@@ -25,9 +25,32 @@ type Screen = 'start' | 'playing' | 'gameover';
 
 const TELEGRAM_BOT_USERNAME = 'your_bot_username';
 
+// Cost in coins to purchase one extra life
+const EXTRA_LIFE_COST = 100;
+
 function shortenAddress(address: string): string {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
+
+// ─── Icon constants — single source of truth used in HUD, modal, leaderboard,
+//     result screen, and power-up bar so every screen always matches the game ──
+const ICON = {
+  coin:    '\uD83E\uDE99',  // 🪙
+  shield:  '\uD83D\uDEE1\uFE0F',  // 🛡️
+  magnet:  '\uD83E\uDDF2',  // 🧲
+  speed:   '\u26A1',         // ⚡
+  combo:   '\uD83D\uDD25',   // 🔥
+  coinCut: '\uD83D\uDC80',   // 💀
+  freeze:  '\u2744\uFE0F',   // ❄️
+  slow:    '\uD83C\uDF00',   // 🌀
+  trophy:  '\uD83C\uDFC6',   // 🏆
+  gift:    '\uD83C\uDF81',   // 🎁
+  surf:    '\uD83C\uDFC4',   // 🏄
+  wave:    '\uD83C\uDF0A',   // 🌊
+  chain:   '\u26D3\uFE0F',   // ⛓️
+  heart:   '\u2764\uFE0F',   // ❤️
+  shop:    '\uD83D\uDED2',   // 🛒
+} as const;
 
 // ─── Wallet Panel ─────────────────────────────────────────────────────────────
 interface WalletPanelProps {
@@ -47,10 +70,6 @@ function WalletPanel({ address, networkName, onDisconnect, onCopy, copyFeedback 
         <div className="wallet-panel-address">{address}</div>
         <div className="wallet-panel-status">
           <span className="wallet-dot" />
-          {/* FIX: was hardcoded to "Ethereum Mainnet" regardless of the
-              actually-connected chain. Now reflects wallet.networkName,
-              which is detected live from the provider and kept in sync
-              via the chainChanged listener in App(). */}
           <span className="wallet-panel-net">{networkName ?? 'Detecting network…'}</span>
         </div>
       </div>
@@ -82,7 +101,9 @@ function Hud({ gameState, scoreAnim, comboAnim }: HudProps) {
       </div>
       <div className="hud-card">
         <span className="hud-label">COINS</span>
-        <span className="hud-value coin-val">🪙 {gameState.coins}</span>
+        <span className="hud-value coin-val">
+          <span className="emoji-icon">{ICON.coin}</span> {gameState.coins}
+        </span>
       </div>
       <div className={`hud-card ${comboAnim ? 'hud-pop' : ''} ${gameState.combo > 3 ? 'hud-hot' : ''}`}>
         <span className="hud-label">COMBO</span>
@@ -102,9 +123,15 @@ function StartOverlay({ onStart }: StartOverlayProps) {
     <div className="overlay start-overlay">
       <div className="start-content">
         <div className="start-logo">
-          <div className="start-waves">🌊🌊🌊</div>
+          <div className="start-waves">
+            <span className="emoji-icon">{ICON.wave}</span>
+            <span className="emoji-icon">{ICON.wave}</span>
+            <span className="emoji-icon">{ICON.wave}</span>
+          </div>
           <h1 className="start-title">SURF RUSH</h1>
-          <div className="start-badge">⛓ WEB3 EDITION</div>
+          <div className="start-badge">
+            <span className="emoji-icon">{ICON.chain}</span> WEB3 EDITION
+          </div>
         </div>
 
         <p className="start-desc">
@@ -113,10 +140,10 @@ function StartOverlay({ onStart }: StartOverlayProps) {
         </p>
 
         <div className="feature-chips">
-          <div className="chip">🏄 Surf</div>
-          <div className="chip">🛡️ Power-ups</div>
-          <div className="chip">⛓️ On-chain</div>
-          <div className="chip">🎁 Daily Rewards</div>
+          <div className="chip"><span className="emoji-icon">{ICON.surf}</span> Surf</div>
+          <div className="chip"><span className="emoji-icon">{ICON.shield}</span> Power-ups</div>
+          <div className="chip"><span className="emoji-icon">{ICON.chain}</span> On-chain</div>
+          <div className="chip"><span className="emoji-icon">{ICON.gift}</span> Daily Rewards</div>
         </div>
 
         <button className="play-btn" onClick={onStart} type="button">
@@ -141,6 +168,70 @@ function StartOverlay({ onStart }: StartOverlayProps) {
   );
 }
 
+// ─── Coin Shop Panel ──────────────────────────────────────────────────────────
+function CoinShopPanel() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="coin-shop-panel section-card">
+      <button
+        className="section-header section-header-btn"
+        onClick={() => setOpen(o => !o)}
+        type="button"
+        aria-expanded={open}
+      >
+        <div className="section-icon"><span className="emoji-icon">{ICON.shop}</span></div>
+        <span className="section-title">Coin Shop</span>
+        <span className="section-badge">{ICON.coin} Use your coins</span>
+        <span className="collapse-chevron">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="coin-shop-body">
+          <p className="coin-shop-intro">
+            Coins you collect during each run can be spent on the Game Over screen
+            or saved for future unlocks.
+          </p>
+          <div className="coin-shop-items">
+            <div className="shop-item">
+              <div className="shop-item-icon"><span className="emoji-icon">{ICON.heart}</span></div>
+              <div className="shop-item-info">
+                <span className="shop-item-name">Extra Life</span>
+                <span className="shop-item-desc">Continue your run from where you fell</span>
+              </div>
+              <div className="shop-item-cost">
+                <span className="emoji-icon">{ICON.coin}</span> {EXTRA_LIFE_COST}
+              </div>
+            </div>
+            <div className="shop-item shop-item-locked">
+              <div className="shop-item-icon"><span className="emoji-icon">{ICON.shield}</span></div>
+              <div className="shop-item-info">
+                <span className="shop-item-name">Shield Power-up</span>
+                <span className="shop-item-desc">Start your next run with a shield active</span>
+              </div>
+              <div className="shop-item-cost shop-item-cost--locked">Coming soon</div>
+            </div>
+            <div className="shop-item shop-item-locked">
+              <div className="shop-item-icon"><span className="emoji-icon">{ICON.magnet}</span></div>
+              <div className="shop-item-info">
+                <span className="shop-item-name">Magnet Boost</span>
+                <span className="shop-item-desc">Start with 6s magnet effect active</span>
+              </div>
+              <div className="shop-item-cost shop-item-cost--locked">Coming soon</div>
+            </div>
+            <div className="shop-item shop-item-locked">
+              <div className="shop-item-icon"><span className="emoji-icon">{ICON.chain}</span></div>
+              <div className="shop-item-info">
+                <span className="shop-item-name">On-chain Reward</span>
+                <span className="shop-item-desc">Redeem coins for on-chain tokens (contract pending)</span>
+              </div>
+              <div className="shop-item-cost shop-item-cost--locked">Pending deploy</div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Game Over Overlay ────────────────────────────────────────────────────────
 interface GameOverOverlayProps {
   finalScore: number;
@@ -154,13 +245,14 @@ interface GameOverOverlayProps {
   txLoading: boolean;
   txPhase: TxPhase;
   txMessage: string | null;
-  // Pass the full wallet state so handlers are never stale
   wallet: WalletState;
+  lives: number;
   onRestart: () => void;
   onShare: () => void;
   onSaveOnChain: () => void;
   onConnectWallet: () => void;
   onClaimReward: () => void;
+  onBuyLife: () => void;
 }
 
 function GameOverOverlay({
@@ -176,16 +268,14 @@ function GameOverOverlay({
   txPhase,
   txMessage,
   wallet,
+  lives,
   onRestart,
   onShare,
   onSaveOnChain,
   onConnectWallet,
   onClaimReward,
+  onBuyLife,
 }: GameOverOverlayProps) {
-  // BUGFIX (root cause #3 — unclear action hierarchy): txStatus used to be a
-  // single string the caller had to sniff with .startsWith('✅'/'⏳'/'❌') to
-  // pick a CSS class. txPhase is now an explicit enum, so the status banner's
-  // styling and copy are derived directly from state instead of parsing text.
   const statusClass =
     txPhase === 'confirmed' ? 'tx-success' :
     txPhase === 'failed'    ? 'tx-error'   :
@@ -193,16 +283,19 @@ function GameOverOverlay({
     '';
   const statusLabel = TX_PHASE_LABEL[txPhase];
 
+  const canAffordLife = finalCoins >= EXTRA_LIFE_COST;
+
   return (
     <div className="overlay gameover-overlay">
       <div className="gameover-modal">
-        {isNewRecord && <div className="new-record-banner">🏆 NEW RECORD!</div>}
+        {isNewRecord && <div className="new-record-banner">{ICON.trophy} NEW RECORD!</div>}
 
         <div className="gameover-header">
           <h2 className="gameover-title">WIPEOUT!</h2>
-          <p className="gameover-sub">Your run has ended. Claim your rewards below.</p>
+          <p className="gameover-sub">Your run has ended. Continue or claim your rewards.</p>
         </div>
 
+        {/* Score card */}
         <div className="score-card">
           <div className="score-card-row">
             <span className="sc-label">Final Score</span>
@@ -211,32 +304,64 @@ function GameOverOverlay({
           <div className="score-card-divider" />
           <div className="score-card-row">
             <span className="sc-label">Coins Collected</span>
-            <span className="sc-value">🪙 {finalCoins}</span>
+            <span className="sc-value">
+              <span className="emoji-icon">{ICON.coin}</span> {finalCoins}
+            </span>
           </div>
-          {/* FIX: previously no explanation of what coins are or whether
-              they can be withdrawn. The contract ABI has no withdraw/redeem
-              function, so this states that plainly instead of leaving it
-              ambiguous. */}
-          <p style={{ fontSize: '12px', color: '#94a3b8', marginTop: '8px', lineHeight: 1.4 }}>
-            🪙 Coins are in-game reward points and cannot currently be withdrawn.
+          <p className="coins-note">
+            <span className="emoji-icon">{ICON.coin}</span> Coins can be spent below — Buy Extra Life or future rewards.
           </p>
         </div>
 
-        {/* FIX (critical): Daily Reward is now a fully local/offline feature —
-            no wallet connection, no MetaMask popup, no transaction of any
-            kind. It never depended on a real reward contract to begin with
-            (it was always +500 in-game coins, never an on-chain transfer),
-            so routing it through claimRewardOnChain() against a zero-address
-            placeholder was never correct. This card no longer mentions
-            wallets or on-chain transactions at all. */}
+        {/* Extra Life / Continue section */}
+        <div className="extra-life-card">
+          <div className="extra-life-header">
+            <span className="emoji-icon">{ICON.heart}</span>
+            <span className="extra-life-title">Continue Your Run?</span>
+            <span className="extra-life-lives">
+              {lives > 0 ? `${lives} ${lives === 1 ? 'life' : 'lives'} remaining` : 'No free lives left'}
+            </span>
+          </div>
+          <div className="extra-life-actions">
+            {lives > 0 && (
+              <button
+                className="action-btn primary-action extra-life-btn"
+                onClick={onBuyLife}
+                type="button"
+              >
+                <span className="emoji-icon">{ICON.heart}</span> Use 1 Life &amp; Continue
+                <span className="extra-life-badge">{lives} left</span>
+              </button>
+            )}
+            <button
+              className={`action-btn extra-life-btn ${canAffordLife ? 'buy-life-action' : 'buy-life-action--disabled'}`}
+              onClick={canAffordLife ? onBuyLife : undefined}
+              type="button"
+              disabled={!canAffordLife}
+              title={canAffordLife ? undefined : `Need ${EXTRA_LIFE_COST} coins to buy a life (you have ${finalCoins})`}
+            >
+              <span className="emoji-icon">{ICON.coin}</span> Buy Life
+              <span className="extra-life-cost-badge">
+                {EXTRA_LIFE_COST} {ICON.coin}
+              </span>
+              {!canAffordLife && (
+                <span className="extra-life-short">
+                  Need {EXTRA_LIFE_COST - finalCoins} more
+                </span>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Daily Reward */}
         <div className="daily-reward-card">
           <div className="dr-header">
-            <span>🎁 Daily Reward</span>
+            <span><span className="emoji-icon">{ICON.gift}</span> Daily Reward</span>
             <span className="dr-timer">{canClaimReward ? 'Ready now!' : timeUntilNextClaim}</span>
           </div>
           <p className="dr-desc">+500 coins · Claimable once every 24 hours</p>
-          <p style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px', lineHeight: 1.4 }}>
-            This is a local in-game reward — no wallet or transaction required.
+          <p className="dr-note">
+            Local in-game reward — no wallet or transaction required.
           </p>
 
           <button
@@ -249,15 +374,10 @@ function GameOverOverlay({
             {claimLoading
               ? <><span className="spinner" /> Claiming…</>
               : canClaimReward
-                ? '🎁 Claim Reward'
-                : `⏳ Next claim in ${timeUntilNextClaim}`}
+                ? <><span className="emoji-icon">{ICON.gift}</span> Claim +500 Coins</>
+                : <>\u23F3 Next claim in {timeUntilNextClaim}</>}
           </button>
 
-          {/* FIX (task 3 & 6): a dedicated, always-clearing status line for
-              the local claim action only — entirely separate from txPhase/
-              txMessage (which now belong solely to the on-chain Save Score
-              flow), so a Save Score error can never bleed into the Daily
-              Reward card and vice versa. */}
           {claimMessage && (
             <div className={`tx-status ${claimSuccess ? 'tx-success' : 'tx-error'}`} style={{ marginTop: '8px' }}>
               {claimMessage}
@@ -265,10 +385,7 @@ function GameOverOverlay({
           )}
         </div>
 
-        {/* UX (action hierarchy): Surf Again / Share remain the two primary
-            navigation actions on every run. Claim Reward now lives in the
-            Daily Reward card above since it's a standalone local action,
-            not a wallet-dependent transaction. */}
+        {/* Primary actions */}
         <div className="gameover-actions">
           <button className="action-btn secondary-action" onClick={onRestart} type="button">
             ↺ Surf Again
@@ -279,11 +396,7 @@ function GameOverOverlay({
           </button>
         </div>
 
-        {/* FIX (task 4 & 5): Save Score On-Chain is only ever shown as an
-            actionable button when REWARD_CONTRACT_DEPLOYED is true. With no
-            deployed contract, a disabled-but-visible button invites "why
-            won't this work?" — a plain, permanent explanatory sentence is
-            clearer and matches the required message exactly. */}
+        {/* On-chain Save Score */}
         <div className="gameover-secondary-actions">
           {REWARD_CONTRACT_DEPLOYED ? (
             wallet.signer ? (
@@ -293,7 +406,7 @@ function GameOverOverlay({
                 type="button"
                 disabled={txLoading}
               >
-                {txLoading ? <span className="spinner" /> : '⛓️ Save Score On-Chain'}
+                {txLoading ? <span className="spinner" /> : <><span className="emoji-icon">{ICON.chain}</span> Save Score On-Chain</>}
               </button>
             ) : (
               <button
@@ -306,13 +419,11 @@ function GameOverOverlay({
             )
           ) : (
             <p className="onchain-unavailable-note">
-              On-chain saving is currently unavailable because no deployed contract is configured.
+              On-chain saving is currently unavailable — no deployed contract is configured.
             </p>
           )}
         </div>
 
-        {/* On-chain Save Score status only — Daily Reward has its own
-            status line above and never touches txPhase/txMessage. */}
         {REWARD_CONTRACT_DEPLOYED && txPhase !== 'idle' && (txMessage || statusLabel) && (
           <div className={`tx-status ${statusClass}`}>
             {txPhase === 'awaiting-approval' || txPhase === 'submitted'
@@ -327,16 +438,19 @@ function GameOverOverlay({
 }
 
 
-// ─── Leaderboard ──────────────────────────────────────────────────────────────
+// ─── Leaderboard (collapsible) ────────────────────────────────────────────────
 interface LeaderboardProps {
   entries: LeaderboardEntry[];
 }
 
 function Leaderboard({ entries }: LeaderboardProps) {
+  // Collapsible — starts closed; click header to open/close
+  const [open, setOpen] = useState(false);
+
   const rankLabel = (i: number) => {
-    if (i === 0) return '🥇';
-    if (i === 1) return '🥈';
-    if (i === 2) return '🥉';
+    if (i === 0) return '\uD83E\uDD47'; // 🥇
+    if (i === 1) return '\uD83E\uDD48'; // 🥈
+    if (i === 2) return '\uD83E\uDD49'; // 🥉
     return `#${i + 1}`;
   };
   const rowClass = (i: number) => {
@@ -348,29 +462,43 @@ function Leaderboard({ entries }: LeaderboardProps) {
 
   return (
     <div className="leaderboard section-card">
-      <div className="section-header">
-        <div className="section-icon">🏆</div>
+      {/* Clickable header toggles the list */}
+      <button
+        className="section-header section-header-btn"
+        onClick={() => setOpen(o => !o)}
+        type="button"
+        aria-expanded={open}
+      >
+        <div className="section-icon">
+          <span className="emoji-icon">{ICON.trophy}</span>
+        </div>
         <span className="section-title">Leaderboard</span>
         <span className="section-badge">{entries.length} entries</span>
-      </div>
-      {entries.length === 0 ? (
-        <div className="lb-empty">Play to appear on the leaderboard!</div>
-      ) : (
-        <div className="lb-list">
-          {entries.map((entry, idx) => (
-            <div key={`${entry.date}-${idx}`} className={rowClass(idx)}>
-              <div className="lb-rank">{rankLabel(idx)}</div>
-              <div className="lb-info">
-                <span className="lb-name">{entry.name}</span>
-                <span className="lb-date">{new Date(entry.date).toLocaleDateString()}</span>
+        <span className="collapse-chevron">{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        entries.length === 0 ? (
+          <div className="lb-empty">Play a run to appear on the leaderboard!</div>
+        ) : (
+          <div className="lb-list">
+            {entries.map((entry, idx) => (
+              <div key={`${entry.date}-${idx}`} className={rowClass(idx)}>
+                <div className="lb-rank">{rankLabel(idx)}</div>
+                <div className="lb-info">
+                  <span className="lb-name">{entry.name}</span>
+                  <span className="lb-date">{new Date(entry.date).toLocaleDateString()}</span>
+                </div>
+                <div className="lb-scores">
+                  <span className="lb-score">{entry.score.toLocaleString()}</span>
+                  <span className="lb-coins">
+                    <span className="emoji-icon">{ICON.coin}</span> {entry.coins}
+                  </span>
+                </div>
               </div>
-              <div className="lb-scores">
-                <span className="lb-score">{entry.score.toLocaleString()}</span>
-                <span className="lb-coins">🪙 {entry.coins}</span>
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )
       )}
     </div>
   );
@@ -382,12 +510,24 @@ interface RulesModalProps {
 }
 
 function RulesModal({ onClose }: RulesModalProps) {
+  // Power-up list — icons EXACTLY match game.ts boxEmoji() and the HUD power-up bar
+  const powerups = [
+    { icon: ICON.shield,  name: 'Shield',      desc: 'Absorbs one collision' },
+    { icon: ICON.magnet,  name: 'Magnet',      desc: 'Attracts coins for 6s' },
+    { icon: ICON.speed,   name: 'Speed Boost', desc: '1.6× speed for 5s' },
+    { icon: ICON.combo,   name: 'Combo Up',    desc: '+1 score multiplier' },
+    { icon: ICON.coinCut, name: 'Coin Cut',    desc: 'Lose 20 coins · avoid!' },
+    { icon: ICON.freeze,  name: 'Freeze',      desc: 'Stops movement for 1.2s' },
+    { icon: ICON.slow,    name: 'Slow Wave',   desc: 'Halves speed for 4s' },
+    { icon: ICON.coin,    name: 'Coin Box',    desc: 'Collects coins × combo' },
+  ];
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="rules-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div className="modal-header-left">
-            <span className="modal-header-icon">🌊</span>
+            <span className="modal-header-icon emoji-icon">{ICON.wave}</span>
             <div>
               <h2>How to Play</h2>
               <p>Surf Rush · Web3 Edition</p>
@@ -397,26 +537,28 @@ function RulesModal({ onClose }: RulesModalProps) {
         </div>
 
         <div className="modal-content">
+          {/* Objective */}
           <div className="modal-section">
             <div className="modal-section-title">
-              <span className="icon">🎯</span> Objective
+              <span className="icon emoji-icon">🎯</span> Objective
             </div>
             <div className="modal-items">
               <div className="modal-item">
-                <span className="modal-item-icon">🏄</span>
+                <span className="modal-item-icon emoji-icon">{ICON.surf}</span>
                 <span>Survive as long as possible on the endless ocean while dodging obstacles.</span>
               </div>
               <div className="modal-item">
-                <span className="modal-item-icon">🪙</span>
-                <span>Collect coins and power-up boxes to increase your score and combo.</span>
+                <span className="modal-item-icon emoji-icon">{ICON.coin}</span>
+                <span>Collect coin boxes and power-up boxes to increase your score and combo.</span>
               </div>
               <div className="modal-item">
-                <span className="modal-item-icon">⛓️</span>
-                <span>Save your high score on-chain and claim daily blockchain rewards.</span>
+                <span className="modal-item-icon emoji-icon">{ICON.chain}</span>
+                <span>Save your high score on-chain and claim daily in-game rewards.</span>
               </div>
             </div>
           </div>
 
+          {/* Controls */}
           <div className="modal-section">
             <div className="modal-section-title">
               <span className="icon">🎮</span> Controls
@@ -433,78 +575,72 @@ function RulesModal({ onClose }: RulesModalProps) {
             </div>
           </div>
 
+          {/* Power-ups — icons match the actual game boxes exactly */}
           <div className="modal-section">
             <div className="modal-section-title">
-              <span className="icon">✨</span> Power-Ups
+              <span className="icon">✨</span> Power-Ups &amp; Boxes
             </div>
             <div className="modal-powerup-grid">
-              <div className="modal-powerup-item">
-                <span className="pu-icon">🛡️</span>
-                <div className="pu-info">
-                  <span className="pu-name">Shield</span>
-                  <span className="pu-desc">Absorbs one collision</span>
+              {powerups.map(p => (
+                <div className="modal-powerup-item" key={p.name}>
+                  <span className="pu-icon emoji-icon">{p.icon}</span>
+                  <div className="pu-info">
+                    <span className="pu-name">{p.name}</span>
+                    <span className="pu-desc">{p.desc}</span>
+                  </div>
                 </div>
-              </div>
-              <div className="modal-powerup-item">
-                <span className="pu-icon">🧲</span>
-                <div className="pu-info">
-                  <span className="pu-name">Magnet</span>
-                  <span className="pu-desc">Attracts coins for 6s</span>
-                </div>
-              </div>
-              <div className="modal-powerup-item">
-                <span className="pu-icon">⚡</span>
-                <div className="pu-info">
-                  <span className="pu-name">Speed Boost</span>
-                  <span className="pu-desc">1.6× speed for 5s</span>
-                </div>
-              </div>
-              <div className="modal-powerup-item">
-                <span className="pu-icon">🔥</span>
-                <div className="pu-info">
-                  <span className="pu-name">Combo Up</span>
-                  <span className="pu-desc">+1 score multiplier</span>
-                </div>
-              </div>
-              <div className="modal-powerup-item">
-                <span className="pu-icon">💀</span>
-                <div className="pu-info">
-                  <span className="pu-name">Coin Cut</span>
-                  <span className="pu-desc">Lose 20 coins · avoid!</span>
-                </div>
-              </div>
-              <div className="modal-powerup-item">
-                <span className="pu-icon">❄️</span>
-                <div className="pu-info">
-                  <span className="pu-name">Freeze</span>
-                  <span className="pu-desc">Stops movement for 1.2s</span>
-                </div>
-              </div>
+              ))}
             </div>
           </div>
 
+          {/* Obstacles */}
           <div className="modal-section">
             <div className="modal-section-title">
               <span className="icon">🚧</span> Obstacles
             </div>
             <div className="modal-items">
-              <div className="modal-item"><span className="modal-item-icon">🪨</span><span>Rock — solid object blocking the lane</span></div>
-              <div className="modal-item"><span className="modal-item-icon">🦈</span><span>Shark — lurks beneath the surface</span></div>
-              <div className="modal-item"><span className="modal-item-icon">🪼</span><span>Jellyfish — drifts unpredictably</span></div>
-              <div className="modal-item"><span className="modal-item-icon">🌊</span><span>Rogue Wave — crashing wall of water</span></div>
+              <div className="modal-item"><span className="modal-item-icon emoji-icon">\uD83E\uDEA8</span><span>Rock — solid object blocking the lane</span></div>
+              <div className="modal-item"><span className="modal-item-icon emoji-icon">\uD83E\uDD88</span><span>Shark — lurks beneath the surface</span></div>
+              <div className="modal-item"><span className="modal-item-icon emoji-icon">\uD83E\uDEBC</span><span>Jellyfish — drifts unpredictably</span></div>
+              <div className="modal-item"><span className="modal-item-icon emoji-icon">{ICON.wave}</span><span>Rogue Wave — crashing wall of water</span></div>
             </div>
           </div>
 
+          {/* Coin Economy */}
           <div className="modal-section">
             <div className="modal-section-title">
-              <span className="icon">⛓️</span> Blockchain Features
+              <span className="icon emoji-icon">{ICON.coin}</span> Coin Economy
             </div>
             <div className="modal-items">
-              <div className="modal-item"><span className="modal-item-icon">◈</span><span>Connect MetaMask to unlock on-chain features</span></div>
-              <div className="modal-item"><span className="modal-item-icon">📊</span><span>Save your high score permanently on-chain after each run</span></div>
-              <div className="modal-item"><span className="modal-item-icon">🎁</span><span>Claim +500 coins as a daily reward once every 24 hours</span></div>
-              <div className="modal-item"><span className="modal-item-icon">🪙</span><span>Coins are in-game reward points and cannot currently be withdrawn</span></div>
-              <div className="modal-item"><span className="modal-item-icon">📱</span><span>On Android, tap Connect Wallet to open in MetaMask Mobile</span></div>
+              <div className="modal-item">
+                <span className="modal-item-icon emoji-icon">{ICON.coin}</span>
+                <span>Collect coin boxes during your run to earn coins (×your current combo multiplier).</span>
+              </div>
+              <div className="modal-item">
+                <span className="modal-item-icon emoji-icon">{ICON.heart}</span>
+                <span>Spend <strong>{EXTRA_LIFE_COST} coins</strong> to buy an Extra Life and continue your run after a wipeout.</span>
+              </div>
+              <div className="modal-item">
+                <span className="modal-item-icon emoji-icon">{ICON.gift}</span>
+                <span>Claim +500 free coins every 24 hours via the Daily Reward — no wallet needed.</span>
+              </div>
+              <div className="modal-item">
+                <span className="modal-item-icon emoji-icon">{ICON.chain}</span>
+                <span>On-chain redemption of coins will be enabled once the reward contract is deployed.</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Blockchain */}
+          <div className="modal-section">
+            <div className="modal-section-title">
+              <span className="icon emoji-icon">{ICON.chain}</span> Blockchain Features
+            </div>
+            <div className="modal-items">
+              <div className="modal-item"><span className="modal-item-icon">◈</span><span>Connect MetaMask to unlock on-chain score saving</span></div>
+              <div className="modal-item"><span className="modal-item-icon emoji-icon">\uD83D\uDCCA</span><span>Save your high score permanently on-chain after each run</span></div>
+              <div className="modal-item"><span className="modal-item-icon emoji-icon">{ICON.gift}</span><span>Daily Reward is local (no wallet needed) — +500 coins, once per 24h</span></div>
+              <div className="modal-item"><span className="modal-item-icon emoji-icon">📱</span><span>On Android, tap Connect Wallet to open in MetaMask Mobile</span></div>
             </div>
           </div>
         </div>
@@ -519,11 +655,9 @@ export default function App() {
   const canvasRef     = useRef<HTMLCanvasElement | null>(null);
   const gameAreaRef   = useRef<HTMLDivElement | null>(null);
   const engineRef     = useRef<GameEngine | null>(null);
-  const playerNameRef = useRef<string>('Player');
+  const playerNameRef = useRef<string>('Surfer');
+  const runCountRef   = useRef<number>(0); // used to generate unique fallback names
 
-  // Keep a ref to wallet so async callbacks always read the latest value
-  // without needing wallet in their useCallback dep arrays (which would
-  // recreate the handlers and cause stale-closure issues in GameOverOverlay).
   const walletRef = useRef<WalletState>({ address: null, provider: null, signer: null, chainId: null, networkName: null });
 
   // Screens & game state
@@ -533,49 +667,34 @@ export default function App() {
   const [finalCoins, setFinalCoins]   = useState(0);
   const [isNewRecord, setIsNewRecord] = useState(false);
 
-  // Wallet — kept in both state (for rendering) and ref (for async handlers)
+  // Extra Life / Lives system
+  // Lives are NOT persistent between sessions — they reset to 0 each run.
+  // Players can purchase a life using coins during the Game Over screen.
+  const [lives, setLives] = useState(0);
+
+  // Wallet
   const [wallet, setWalletState]       = useState<WalletState>({ address: null, provider: null, signer: null, chainId: null, networkName: null });
   const [walletError, setWalletError]  = useState<string | null>(null);
 
-  // BUGFIX (root cause #1 — "wallet modal re-triggering" / status bleeding
-  // across screens): connect-wallet status and on-chain-transaction status
-  // used to share a single `txStatus` string + `txLoading` boolean. That
-  // meant leftover "Connecting…" text from the topbar button could still be
-  // visible when the user reached the Game Over screen's Claim/Save buttons
-  // (and vice versa), which read as the wallet prompt mysteriously
-  // reappearing. They're now fully separate state so neither flow can leak
-  // into the other's UI.
   const [connectPhase, setConnectPhase] = useState<TxPhase>('idle');
   const [txPhase, setTxPhase]           = useState<TxPhase>('idle');
-  const [txMessage, setTxMessage]       = useState<string | null>(null); // human-readable detail for the current txPhase (success hash, error reason, etc.)
+  const [txMessage, setTxMessage]       = useState<string | null>(null);
   const connectLoading = connectPhase === 'connecting-wallet' || connectPhase === 'awaiting-approval';
   const txLoading      = txPhase === 'awaiting-approval' || txPhase === 'submitted';
 
-  // BUGFIX (root cause #2 — "stuck"/inconsistent loading on double-tap):
-  // refs (not state) so a fast double-click/double-tap can be rejected
-  // synchronously, before React even re-renders to disable the button.
-  // Using state for this guard would still allow a second click to slip in
-  // during the brief window before the disabled prop takes visual effect.
   const connectInFlightRef = useRef(false);
   const txInFlightRef      = useRef(false);
 
   const [copyFeedback, setCopyFeedback] = useState(false);
 
-  /** Sets wallet in both state and ref so async handlers are never stale. */
   const setWallet = useCallback((w: WalletState) => {
     walletRef.current = w;
     setWalletState(w);
   }, []);
 
-  // ── Live network change listener ───────────────────────────────────────────
-  // FIX: previously the displayed network was a hardcoded string and never
-  // reacted to anything. This keeps wallet.networkName accurate if the user
-  // switches networks in MetaMask while the dapp stays open, without
-  // requiring a reconnect or page reload.
+  // Live network change listener
   useEffect(() => {
     const unsubscribe = subscribeToChainChanges((chainId, networkName) => {
-      // Only update if a wallet is actually connected — avoids creating a
-      // "connected" looking state from a stray chainId event.
       if (!walletRef.current.address) return;
       setWallet({ ...walletRef.current, chainId, networkName });
     });
@@ -584,7 +703,7 @@ export default function App() {
 
   // Leaderboard / player
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
-  const [playerName, setPlayerName]   = useState<string>('Player');
+  const [playerName, setPlayerName]   = useState<string>('Surfer');
 
   // HUD animations
   const [scoreAnim, setScoreAnim] = useState(false);
@@ -599,7 +718,6 @@ export default function App() {
   const [lastClaimTime, setLastClaimTime]           = useState<number | null>(null);
   const [timeUntilNextClaim, setTimeUntilNextClaim] = useState('Ready now!');
 
-  // ── Daily reward timer ─────────────────────────────────────────────────────
   useEffect(() => {
     const saved = localStorage.getItem('surfRushLastClaim');
     if (saved) setLastClaimTime(parseInt(saved, 10));
@@ -621,16 +739,13 @@ export default function App() {
 
   const canClaimReward = !lastClaimTime || Date.now() - lastClaimTime >= 24 * 60 * 60 * 1000;
 
-  // FIX (critical, task 3 & 6): Daily Reward is now a fully local feature —
-  // its loading/message/success state is intentionally separate from
-  // connectPhase/txPhase/txMessage (which remain scoped to wallet-connect
-  // and the on-chain Save Score flow). This guarantees the claim button can
-  // never inherit a stuck or unrelated status from another flow, and that
-  // an on-chain Save Score failure can never show up under Daily Reward.
+  // Claim reward state (separate from wallet tx state)
   const [claimLoading, setClaimLoading] = useState(false);
   const [claimMessage, setClaimMessage] = useState<string | null>(null);
   const [claimSuccess, setClaimSuccess] = useState(false);
   const claimInFlightRef = useRef(false);
+  const canClaimRewardRef = useRef(canClaimReward);
+  useEffect(() => { canClaimRewardRef.current = canClaimReward; }, [canClaimReward]);
 
   // ── Telegram + leaderboard init ────────────────────────────────────────────
   useEffect(() => {
@@ -638,6 +753,11 @@ export default function App() {
     const tgUser = getTelegramUser();
     if (tgUser) {
       const name = tgUser.username ? `@${tgUser.username}` : tgUser.first_name;
+      setPlayerName(name);
+      playerNameRef.current = name;
+    } else {
+      // Fallback: meaningful label instead of generic "Player"
+      const name = 'Surfer';
       setPlayerName(name);
       playerNameRef.current = name;
     }
@@ -672,11 +792,6 @@ export default function App() {
       return;
     }
 
-    // FIX: if the same canvas element is passed again (React Strict Mode
-    // double-invoke, or some other re-call), don't recreate the engine —
-    // that would register a second engine against the same canvas and fire
-    // onGameOver from the first engine's stale closure while the second is
-    // also running, causing an immediate game-over transition.
     if (canvas === canvasRef.current && engineRef.current) return;
 
     canvasRef.current = canvas;
@@ -692,8 +807,14 @@ export default function App() {
         const top  = prev.length > 0 ? prev[0].score : 0;
         setIsNewRecord(score > top);
 
+        // Build a meaningful name: Telegram name, or "Surfer #N"
+        runCountRef.current += 1;
+        const displayName = playerNameRef.current && playerNameRef.current !== 'Surfer'
+          ? playerNameRef.current
+          : `Surfer #${runCountRef.current}`;
+
         const updated = saveToLeaderboard({
-          name:  playerNameRef.current,
+          name:  displayName,
           score,
           coins,
           date:  new Date().toISOString(),
@@ -745,21 +866,13 @@ export default function App() {
   // ── Game actions ───────────────────────────────────────────────────────────
   const startGame = useCallback(() => {
     setScreen('playing');
-    // FIX: reset BOTH phase trackers on a new game. Previously only
-    // txPhase was cleared here — connectPhase from an earlier successful
-    // "Wallet connected" could still read 'confirmed' on a later Game Over
-    // screen with no live txPhase to take priority, so the stale
-    // "connected" status text/banner would resurface from a prior run.
     setTxPhase('idle');
     setConnectPhase('idle');
     setTxMessage(null);
+    setClaimMessage(null);
+    setClaimSuccess(false);
     txInFlightRef.current = false;
-    // FIX: defer engine.start() by one rAF so the 'playing' screen state
-    // has been committed to the DOM and the game-area div has its final
-    // layout dimensions before resize() runs inside start(). Without this,
-    // start() could read a 0 or minimal clientHeight from the container
-    // (because the StartOverlay is still mounted during this synchronous
-    // call), leading to a tiny playerY and near-immediate collision.
+    setLives(0); // lives reset each fresh run
     requestAnimationFrame(() => {
       engineRef.current?.start();
     });
@@ -767,18 +880,40 @@ export default function App() {
 
   const restartGame = useCallback(() => {
     setScreen('playing');
-    // FIX: same as startGame — clear both phase trackers so no stale
-    // connect-flow status can resurface on the next Game Over screen.
     setTxPhase('idle');
     setConnectPhase('idle');
     setTxMessage(null);
+    setClaimMessage(null);
+    setClaimSuccess(false);
     txInFlightRef.current = false;
-    // FIX: same deferred-start fix as startGame — wait one rAF so the
-    // gameover overlay is unmounted and the game-area has correct dimensions.
+    setLives(0);
     requestAnimationFrame(() => {
       engineRef.current?.restart();
     });
   }, []);
+
+  /**
+   * Buy an Extra Life using coins and continue the run.
+   * Uses lives first (free), otherwise deducts EXTRA_LIFE_COST coins.
+   * The engine resumes from the exact point of death with a temporary shield.
+   */
+  const handleBuyLife = useCallback(() => {
+    if (lives > 0) {
+      // Use a free life
+      setLives(l => l - 1);
+      setScreen('playing');
+      requestAnimationFrame(() => {
+        engineRef.current?.addLife(0);
+      });
+    } else if (finalCoins >= EXTRA_LIFE_COST) {
+      // Spend coins
+      setFinalCoins(c => c - EXTRA_LIFE_COST);
+      setScreen('playing');
+      requestAnimationFrame(() => {
+        engineRef.current?.addLife(EXTRA_LIFE_COST);
+      });
+    }
+  }, [lives, finalCoins]);
 
   const togglePause = useCallback(() => {
     engineRef.current?.togglePause();
@@ -786,29 +921,15 @@ export default function App() {
 
   // ── Wallet actions ─────────────────────────────────────────────────────────
   const handleConnectWallet = useCallback(async () => {
-    // BUGFIX (root cause #2 — duplicate wallet prompts / stuck loading):
-    // reject re-entrant calls synchronously via a ref, not state, so a fast
-    // double-click/double-tap on "Connect Wallet" can never fire a second
-    // eth_requestAccounts while the first is still pending. Two concurrent
-    // requests racing against the wallet is what previously produced
-    // inconsistent / seemingly-stuck loading state.
     if (connectInFlightRef.current) return;
     connectInFlightRef.current = true;
 
     setWalletError(null);
     setTxMessage(null);
 
-    // FIX: Do NOT gate on isMetaMaskAvailable() here anymore.
-    // connectWallet() in wallet.ts now handles the three cases:
-    //   1. Injected provider present → connect normally
-    //   2. Mobile without provider   → deep-link to MetaMask Mobile
-    //   3. Desktop without provider  → throw NO_WALLET error
-    // We only need to show loading state and handle the result.
-
     try {
       setConnectPhase('connecting-wallet');
 
-      // Show different message depending on platform
       if (!isInjectedWalletAvailable() && isMobileDevice()) {
         setTxMessage('Opening MetaMask Mobile…');
       } else {
@@ -822,14 +943,12 @@ export default function App() {
       setConnectPhase('confirmed');
       setTxMessage(`${getWalletName()} connected: ${shortenAddress(connected.address!)}`);
     } catch (err: any) {
-      // Deep-link redirect: the page is about to navigate away, show a friendly message
       if (err.code === 'DEEPLINK_REDIRECT') {
-        setConnectPhase('idle'); // not a failure — the redirect is intentional
+        setConnectPhase('idle');
         setTxMessage('Opening MetaMask Mobile… return here after connecting.');
         return;
       }
 
-      // No wallet installed on desktop
       if (err.code === 'NO_WALLET') {
         const msg = err.message;
         setWalletError(msg);
@@ -838,7 +957,6 @@ export default function App() {
         return;
       }
 
-      // User rejected the connection prompt (EIP-1193 error code 4001)
       if (
         err.code === 4001 ||
         err.message?.includes('rejected') ||
@@ -853,15 +971,11 @@ export default function App() {
         return;
       }
 
-      // Generic fallback
       const msg = err instanceof Error ? err.message : 'Failed to connect wallet.';
       setWalletError(msg);
       setConnectPhase('failed');
       setTxMessage(msg);
     } finally {
-      // FIX: this always runs, on every exit path (success, every early
-      // return, and the generic catch), so the in-flight guard and any
-      // lingering "Connecting…" UI can never get permanently stuck.
       connectInFlightRef.current = false;
     }
   }, [setWallet]);
@@ -882,22 +996,12 @@ export default function App() {
     });
   }, []);
 
-  // FIX: reads signer from walletRef.current (always latest) instead of
-  // closing over wallet.signer at hook-creation time. This means the handler
-  // works immediately after connectWallet() resolves, even though the
-  // GameOverOverlay received the handler before the wallet was connected.
   const handleSaveScoreOnChain = useCallback(async () => {
-    // BUGFIX (root cause #2): guard against a double-tap firing two
-    // saveScoreOnChain transactions back to back.
     if (txInFlightRef.current) return;
 
-    // FIX (task 4 & 5, defense-in-depth): the UI already hides this action
-    // entirely when REWARD_CONTRACT_DEPLOYED is false, but the handler
-    // checks too — the same pattern wallet.ts uses internally — so this
-    // can never fire even if called some other way.
     if (!REWARD_CONTRACT_DEPLOYED) {
       setTxPhase('failed');
-      setTxMessage('On-chain saving is currently unavailable because no deployed contract is configured.');
+      setTxMessage('On-chain saving is currently unavailable — no deployed contract is configured.');
       return;
     }
 
@@ -915,8 +1019,6 @@ export default function App() {
       const hash = await saveScoreOnChain(signer, finalScore);
       setTxPhase('submitted');
       setTxMessage(`Transaction submitted: ${shortenAddress(hash)}`);
-      // saveScoreOnChain() already awaits confirmation (see wallet.ts
-      // waitForTx), so by the time we reach here it's actually confirmed.
       setTxPhase('confirmed');
       setTxMessage(`Score saved on-chain! Tx: ${shortenAddress(hash)}`);
     } catch (err: any) {
@@ -927,32 +1029,11 @@ export default function App() {
         setTxMessage(err.message || 'Transaction failed.');
       }
     } finally {
-      // FIX: guarantees the in-flight guard always clears and the spinner
-      // never gets permanently stuck, regardless of which path was taken.
       txInFlightRef.current = false;
     }
-  }, [finalScore]); // finalScore is the only value not in a ref
+  }, [finalScore]);
 
-  // FIX: same pattern — reads signer from walletRef so it's never stale.
-  // Also uses a ref for canClaimReward so it doesn't need to be a dep.
-  const canClaimRewardRef = useRef(canClaimReward);
-  useEffect(() => { canClaimRewardRef.current = canClaimReward; }, [canClaimReward]);
-
-  // FIX (critical — tasks 1, 2, 3, 6): Daily Reward claiming used to call
-  // claimRewardOnChain(signer), which (even with wallet.ts's guard) meant
-  // a wallet had to be connected first and would still show transaction-
-  // style status text on rejection. The reward was always +500 in-game
-  // coins — never an on-chain transfer — so there was never a reason to
-  // require a wallet or open MetaMask for it. This is now a synchronous
-  // local action: no signer, no contract call, no network request of any
-  // kind. It cannot fail the way a transaction can, so the old generic
-  // "Transaction failed. Please try again." message is gone entirely —
-  // there is no failure mode here except "already claimed today", which
-  // gets its own specific, accurate message instead.
   const handleClaimReward = useCallback(() => {
-    // BUGFIX (root cause #2 pattern, applied locally): guard against a
-    // double-tap awarding the reward twice before React re-renders the
-    // disabled state.
     if (claimInFlightRef.current) return;
     claimInFlightRef.current = true;
     setClaimLoading(true);
@@ -964,11 +1045,6 @@ export default function App() {
         return;
       }
 
-      // Award +500 coins locally. There is no persistent cross-run coin
-      // balance elsewhere in this app (each run's coins are independent
-      // and shown only on that run's Game Over screen / leaderboard
-      // entry), so the reward is applied to the score currently on
-      // screen — visible immediately, with no separate balance to track.
       setFinalCoins((prev) => prev + 500);
 
       const now = Date.now();
@@ -976,15 +1052,12 @@ export default function App() {
       setLastClaimTime(now);
 
       setClaimSuccess(true);
-      setClaimMessage('Daily reward claimed successfully.');
+      setClaimMessage('Daily reward claimed! +500 coins added.');
     } finally {
-      // FIX (task 6): always clears, synchronously — there is no async gap
-      // here for the UI to get stuck in, but the same guaranteed-cleanup
-      // pattern is kept for consistency with the other handlers.
       setClaimLoading(false);
       claimInFlightRef.current = false;
     }
-  }, []); // no deps — reads canClaimReward from a ref, writes via setters
+  }, []);
 
   const handleShareScore = useCallback(() => {
     shareScore(finalScore, TELEGRAM_BOT_USERNAME);
@@ -993,11 +1066,11 @@ export default function App() {
   // ── Active power-up effects ────────────────────────────────────────────────
   const activeEffects = gameState
     ? ([
-        gameState.hasShield                    && { icon: '🛡️', label: 'Shield', color: '#06b6d4' },
-        Date.now() < gameState.magnetUntil     && { icon: '🧲', label: 'Magnet', color: '#f97316' },
-        Date.now() < gameState.speedBoostUntil && { icon: '⚡', label: 'Boost',  color: '#10b981' },
-        Date.now() < gameState.freezeUntil     && { icon: '❄️', label: 'Frozen', color: '#60a5fa' },
-        Date.now() < gameState.slowUntil       && { icon: '🌀', label: 'Slow',   color: '#0d9488' },
+        gameState.hasShield                    && { icon: ICON.shield, label: 'Shield', color: '#06b6d4' },
+        Date.now() < gameState.magnetUntil     && { icon: ICON.magnet, label: 'Magnet', color: '#f97316' },
+        Date.now() < gameState.speedBoostUntil && { icon: ICON.speed,  label: 'Boost',  color: '#10b981' },
+        Date.now() < gameState.freezeUntil     && { icon: ICON.freeze, label: 'Frozen', color: '#60a5fa' },
+        Date.now() < gameState.slowUntil       && { icon: ICON.slow,   label: 'Slow',   color: '#0d9488' },
       ] as (false | { icon: string; label: string; color: string })[]).filter(Boolean)
     : [];
 
@@ -1008,7 +1081,7 @@ export default function App() {
       {/* Top Bar */}
       <div className="topbar">
         <div className="brand">
-          <span className="brand-icon">🌊</span>
+          <span className="brand-icon emoji-icon">{ICON.wave}</span>
           <div className="brand-text">
             <span className="brand-title">SURF RUSH</span>
             <span className="brand-sub">WEB3</span>
@@ -1030,12 +1103,6 @@ export default function App() {
               {shortenAddress(wallet.address)}
             </button>
           ) : (
-            // BUGFIX (root cause #1): this used to read the shared
-            // `txLoading` flag, so it would show "Connecting…" and disable
-            // itself whenever a Claim/Save transaction was in flight on the
-            // Game Over screen — completely unrelated to wallet connection.
-            // It now reads `connectLoading`, which is scoped only to the
-            // connect-wallet flow.
             <button className="wallet-btn" onClick={handleConnectWallet} type="button" disabled={connectLoading}>
               {connectLoading
                 ? <><span className="spinner" style={{ width: 12, height: 12, borderWidth: 2 }} /> Connecting…</>
@@ -1067,7 +1134,7 @@ export default function App() {
         <div className="powerup-bar">
           {(activeEffects as { icon: string; label: string; color: string }[]).map((fx) => (
             <div className="powerup-badge" key={fx.label} style={{ borderColor: fx.color, color: fx.color }}>
-              <span>{fx.icon}</span>
+              <span className="emoji-icon">{fx.icon}</span>
               <span>{fx.label}</span>
             </div>
           ))}
@@ -1094,19 +1161,20 @@ export default function App() {
             isNewRecord={isNewRecord}
             timeUntilNextClaim={timeUntilNextClaim}
             canClaimReward={canClaimReward}
-            // The Game Over screen's "Connect Wallet to Claim/Save" buttons
-            // can trigger the connect flow, and its "Claim"/"Save" buttons
-            // trigger the tx flow — show whichever of the two is actually
-            // active right now, rather than mixing them into one flag.
+            claimLoading={claimLoading}
+            claimMessage={claimMessage}
+            claimSuccess={claimSuccess}
             txLoading={connectLoading || txLoading}
             txPhase={txPhase !== 'idle' ? txPhase : connectPhase}
             txMessage={txMessage}
             wallet={wallet}
+            lives={lives}
             onRestart={restartGame}
             onShare={handleShareScore}
             onSaveOnChain={handleSaveScoreOnChain}
             onConnectWallet={handleConnectWallet}
             onClaimReward={handleClaimReward}
+            onBuyLife={handleBuyLife}
           />
         )}
       </div>
@@ -1122,7 +1190,10 @@ export default function App() {
         </div>
       )}
 
-      {/* Leaderboard */}
+      {/* Coin Shop */}
+      <CoinShopPanel />
+
+      {/* Leaderboard (collapsible) */}
       <Leaderboard entries={leaderboard} />
 
       {/* Rules modal */}

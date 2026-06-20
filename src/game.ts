@@ -82,16 +82,10 @@ const BASE_SPEED        = 220;
 const MAX_SPEED         = 620;
 const SPEED_RAMP_PER_SEC = 4;
 
-// BALANCE FIX: how long after a run starts before obstacles can end the
-// game. During this window obstacles still spawn and move (so the lane
-// isn't empty/jarring), but collisions are ignored — giving the player a
-// genuine, unhurried look at how the game plays before any risk begins.
+// Grace period: collisions are ignored for the first 3 seconds.
 const SAFE_START_SECONDS = 3;
 
-// BALANCE FIX: difficulty ramps in smoothly over this many seconds instead
-// of being at near-full intensity within the first couple of spawns. Spawn
-// interval, obstacle-vs-box ratio, and obstacle size all ease from an easy
-// starting value up to their normal value across this window.
+// Difficulty ramps smoothly over this many seconds.
 const DIFFICULTY_RAMP_SECONDS = 20;
 
 export class GameEngine {
@@ -99,7 +93,6 @@ export class GameEngine {
   private ctx: CanvasRenderingContext2D;
   private callbacks: GameCallbacks;
 
-  // Logical dimensions — set by resize(), always ≥ 280×480
   private width  = 360;
   private height = 640;
   private laneWidth = this.width / LANE_COUNT;
@@ -132,17 +125,8 @@ export class GameEngine {
   private shieldPulse = 0;
   private magnetPulse = 0;
 
-  // PERF FIX: the deep-ocean background gradient only depends on
-  // width/height, not on time — previously it was rebuilt with
-  // createLinearGradient() every single frame (60×/sec), which is one of
-  // the more expensive Canvas2D calls. Cache it and only rebuild on resize.
   private bgGradientCache: CanvasGradient | null = null;
 
-  // PERF FIX: detect lower-powered devices (most Android phones report
-  // fewer logical cores than desktops) and a mobile/coarse-pointer
-  // environment, so the render loop can skip the most expensive
-  // decorative-only effects (light rays, per-frame speed-line redraw,
-  // heavy shadowBlur glows) without changing any gameplay logic.
   private isLowPower: boolean =
     typeof navigator !== 'undefined' &&
     (((navigator as any).hardwareConcurrency ?? 8) <= 4 ||
@@ -152,31 +136,17 @@ export class GameEngine {
 
   constructor(canvas: HTMLCanvasElement, callbacks: GameCallbacks) {
     this.canvas    = canvas;
-    // PERF FIX: { alpha: false } tells the browser this canvas never needs
-    // to composite with transparency beneath it (drawBackground() always
-    // paints a fully opaque rect first), which lets the browser skip alpha
-    // blending work on every frame — a meaningful saving on Android GPUs.
     const ctx      = canvas.getContext('2d', { alpha: false });
     if (!ctx) throw new Error('Canvas 2D context not available');
     this.ctx       = ctx;
     this.callbacks = callbacks;
 
-    // FIX: Initialize wave layers and bubbles SYNCHRONOUSLY so they are
-    // always available even if start() is called before the deferred task
-    // below runs. Previously these were only set up in the microtask, so
-    // calling start() quickly could leave waveLayers/bubbles empty, causing
-    // drawBackground() to silently fail and the loop to behave incorrectly.
     this.initWaveLayers();
     this.initBubbles();
 
-    // Defer the first resize + idle render to the next microtask so the
-    // canvas node has been fully laid out by the browser (avoids 0×0
-    // dimensions on first paint).
     Promise.resolve().then(() => {
       this.resize();
-      // Re-scatter bubbles now that we have real dimensions.
       this.initBubbles();
-      // Draw the idle ocean scene immediately so the game area is never blank.
       this.renderIdleBackground();
     });
 
@@ -189,16 +159,7 @@ export class GameEngine {
 
   public start(): void {
     this.cancelLoop();
-    // FIX: re-measure the container right before play begins. The very
-    // first resize() runs in a deferred microtask after construction
-    // (see constructor), so if the user taps "Start" before that
-    // microtask flushes — or before Android's layout has settled —
-    // start() could begin with stale/zero playerY. Resizing here
-    // guarantees correct, current dimensions every time a run starts.
     this.resize();
-    // FIX: ensure wave layers and bubbles are always populated before the
-    // loop begins, even if the constructor's deferred microtask hasn't run
-    // yet (e.g. user taps Start very quickly after page load).
     if (this.waveLayers.length === 0) this.initWaveLayers();
     if (this.bubbles.length === 0)    this.initBubbles();
     this.reset();
@@ -243,10 +204,31 @@ export class GameEngine {
 
   public restart(): void {
     this.cancelLoop();
-    this.resize(); // FIX: same reasoning as start() — always measure fresh
+    this.resize();
     if (this.waveLayers.length === 0) this.initWaveLayers();
     if (this.bubbles.length === 0)    this.initBubbles();
     this.reset();
+    this.lastTimestamp    = performance.now();
+    this.animationFrameId = requestAnimationFrame(this.loop);
+  }
+
+  /**
+   * Continue the run after purchasing an extra life.
+   * Clears game-over state, restores shield, clears all active obstacles
+   * (so player isn't immediately hit again), and resumes the loop.
+   */
+  public addLife(coinsSpent: number): void {
+    if (!this.state.isGameOver) return;
+    // Deduct coins from in-game balance
+    this.state.coins      = Math.max(0, this.state.coins - coinsSpent);
+    this.state.isGameOver = false;
+    this.state.isPaused   = false;
+    // Give temporary shield so the respawn feels fair
+    this.state.hasShield  = true;
+    // Clear active obstacles — the player spawns on a clear lane
+    this.obstacles = [];
+    this.spawnTimer = 0;
+    this.emitState();
     this.lastTimestamp    = performance.now();
     this.animationFrameId = requestAnimationFrame(this.loop);
   }
@@ -291,8 +273,6 @@ export class GameEngine {
   }
 
   private initBubbles(): void {
-    // PERF FIX: fewer ambient bubbles on low-power/mobile devices —
-    // each one is a stroked arc redrawn every frame.
     const count = this.isLowPower ? 12 : 22;
     this.bubbles = Array.from({ length: count }, () => ({
       x:       Math.random() * this.width,
@@ -340,35 +320,23 @@ export class GameEngine {
   private resize = (): void => {
     const parent = this.canvas.parentElement;
 
-    // Read real layout dimensions; fall back to sensible defaults.
     const rawW = parent ? parent.clientWidth  : 360;
     const rawH = parent ? parent.clientHeight : 640;
 
     this.width = Math.max(280, Math.min(rawW, 480));
 
-    // FIX (root cause of instant WIPEOUT): Always enforce a minimum playable
-    // height. If the game-area container reports a height smaller than
-    // MIN_PLAYABLE_HEIGHT (e.g. on Android Chrome during address-bar
-    // collapse/expand, before flex layout settles, or when the CSS hasn't
-    // applied yet), playerY = height - 90 would be very small or negative,
-    // making the player spawn near the top of the canvas. The very first
-    // spawned obstacle (y = -60) would then reach playerY within a fraction
-    // of a second — an unwinnable instant collision.
-    // Using Math.max unconditionally (not a conditional branch) ensures we
-    // ALWAYS get a safe height, even for heights between 1 and MIN-1.
     const MIN_PLAYABLE_HEIGHT = 500;
     this.height    = Math.max(rawH, MIN_PLAYABLE_HEIGHT);
     this.laneWidth = this.width / LANE_COUNT;
 
     this.canvas.width  = this.width;
     this.canvas.height = this.height;
-    this.bgGradientCache = null; // dimensions changed — force gradient rebuild next frame
+    this.bgGradientCache = null;
 
     this.playerX       = this.laneCenter(this.playerLane);
     this.playerTargetX = this.playerX;
     this.playerY       = this.height - 90;
 
-    // Re-scatter bubbles to new dimensions
     if (this.bubbles.length > 0) {
       for (const b of this.bubbles) {
         b.x = Math.random() * this.width;
@@ -398,11 +366,6 @@ export class GameEngine {
   }
 
   private currentSpeed(): number {
-    // BALANCE FIX: scale the speed ramp's contribution by the difficulty
-    // ramp so the obstacle/box stream is visibly slower (more reaction
-    // time) right as risk begins, easing up to the original ramp rate by
-    // the time DIFFICULTY_RAMP_SECONDS has passed. Base speed is untouched
-    // so overall pacing past the intro window is unchanged.
     const rampedAddition = this.elapsedSeconds * SPEED_RAMP_PER_SEC * (0.5 + 0.5 * this.difficultyRamp());
     let speed = Math.min(BASE_SPEED + rampedAddition, MAX_SPEED);
     const now = performance.now();
@@ -412,22 +375,12 @@ export class GameEngine {
     return speed;
   }
 
-  // BALANCE FIX: 0 → 1 progress through the opening difficulty ramp,
-  // counted from the moment the safe-start window ends (so the player's
-  // first real seconds of risk are also the easiest ones, not just the
-  // ones during the collision-free grace period). Eased with a smoothstep
-  // curve so difficulty climbs gradually rather than linearly/abruptly.
   private difficultyRamp(): number {
     const sinceRiskStarted = Math.max(0, this.elapsedSeconds - SAFE_START_SECONDS);
     const t = Math.min(1, sinceRiskStarted / DIFFICULTY_RAMP_SECONDS);
-    return t * t * (3 - 2 * t); // smoothstep
+    return t * t * (3 - 2 * t);
   }
 
-  /** PERF FIX: shadowBlur is one of the most expensive Canvas2D operations
-   *  on mobile GPUs because it requires an extra blur pass per shape. Scale
-   *  every glow request down on low-power devices instead of disabling
-   *  glows altogether, preserving the visual identity of the game while
-   *  cutting the render cost meaningfully. */
   private blur(amount: number): number {
     return this.isLowPower ? amount * 0.4 : amount;
   }
@@ -453,19 +406,16 @@ export class GameEngine {
   private update(delta: number): void {
     const speed = this.currentSpeed();
 
-    // Player lerp + tilt decay
     this.playerX    += (this.playerTargetX - this.playerX) * Math.min(1, 10 * delta);
     this.playerTilt *= Math.pow(0.05, delta);
 
     this.shieldPulse += delta * 3;
     this.magnetPulse += delta * 4;
 
-    // Wave layers
     for (const wl of this.waveLayers) {
       wl.offset += wl.speed * delta;
     }
 
-    // Move entities
     for (const ob of this.obstacles) {
       ob.y      += speed * delta;
       ob.wobble += delta * 3;
@@ -475,7 +425,6 @@ export class GameEngine {
       box.pulse += delta * 4;
     }
 
-    // Particles
     for (const p of this.particles) {
       p.x    += p.vx * delta;
       p.y    += p.vy * delta;
@@ -484,7 +433,6 @@ export class GameEngine {
     }
     this.particles = this.particles.filter(p => p.life > 0);
 
-    // Bubbles
     for (const b of this.bubbles) {
       b.y -= b.speed;
       if (b.y < -10) {
@@ -493,7 +441,6 @@ export class GameEngine {
       }
     }
 
-    // Foam
     for (const f of this.foamParticles) {
       f.life -= delta;
     }
@@ -508,11 +455,6 @@ export class GameEngine {
       });
     }
 
-    // Spawn entities
-    // BALANCE FIX: spawn interval now starts noticeably slower
-    // (0.45s → was effectively reachable within ~65s; intro now starts at
-    // 1.6s) and only eases down to the original 1.1s→0.45s curve once the
-    // difficulty ramp has progressed, instead of being fast from second one.
     this.spawnTimer += delta;
     const introInterval = 1.6;
     const baseInterval  = Math.max(0.45, 1.1 - this.elapsedSeconds * 0.01);
@@ -522,10 +464,8 @@ export class GameEngine {
       this.spawnEntity();
     }
 
-    // Score
     this.state.score += Math.round(speed * delta * 0.1);
 
-    // Magnet
     const now = performance.now();
     if (now < this.state.magnetUntil) {
       for (const box of this.boxes) {
@@ -546,25 +486,14 @@ export class GameEngine {
   private spawnEntity(): void {
     const lane = Math.floor(Math.random() * LANE_COUNT) as LaneIndex;
     const roll = Math.random();
-
-    // FIX: spawn entities well off the top of the screen (y = -80 instead
-    // of -60) so there is no chance of a collision on the very first frame
-    // they appear, even on small canvas heights.
     const spawnY = -80;
 
-    // BALANCE FIX: obstacle chance eases from a low intro value up to the
-    // original 55% as the difficulty ramp progresses, so the player meets
-    // mostly (harmless-to-miss) mystery boxes at first and obstacles become
-    // common only once they've had time to learn the controls.
     const introObstacleChance = 0.25;
     const baseObstacleChance  = 0.55;
     const obstacleChance = introObstacleChance + (baseObstacleChance - introObstacleChance) * this.difficultyRamp();
 
     if (roll < obstacleChance) {
-      const type = OBSTACLE_TYPES[Math.floor(Math.random() * OBSTACLE_TYPES.length)];
-      // BALANCE FIX: obstacles are visually/physically slightly smaller
-      // during the intro ramp (easier to dodge / less likely to clip a
-      // lane-edge graze), growing to their normal size as difficulty ramps.
+      const type  = OBSTACLE_TYPES[Math.floor(Math.random() * OBSTACLE_TYPES.length)];
       const sizeT = 0.8 + 0.2 * this.difficultyRamp();
       this.obstacles.push({
         lane, y: spawnY,
@@ -587,26 +516,10 @@ export class GameEngine {
   }
 
   private handleCollisions(): void {
-    // BALANCE FIX: no collision can register until SAFE_START_SECONDS (3s)
-    // have elapsed since the run began. Obstacles still spawn and move
-    // during this window so the screen isn't empty, but they are completely
-    // harmless until the safe-start window ends — replaces the previous
-    // 0.5s grace period, which was too short to count as a real safe start.
     if (this.elapsedSeconds < SAFE_START_SECONDS) return;
-
-    // Safety check: if playerY is unrealistically small (layout not settled),
-    // skip collision detection entirely for this frame.
     if (this.playerY < 50) return;
 
-    // BALANCE FIX (fairer hitboxes): previously any obstacle/box sharing the
-    // player's lane counted as a vertical-only overlap check — i.e. the
-    // *entire lane width* was treated as solid, so even an obstacle drawn
-    // near the lane's edge (visually not touching the player) would trigger
-    // a hit. Collision now also checks horizontal overlap using each
-    // entity's real on-screen width, shrunk by COLLISION_FORGIVENESS so the
-    // hitbox is comfortably smaller than the visible sprite — a clear,
-    // actual overlap is required, not just "same lane."
-    const COLLISION_FORGIVENESS = 0.6; // fraction of visual size that counts as solid
+    const COLLISION_FORGIVENESS = 0.6;
     const playerHalfW  = (this.laneWidth * 0.5) * COLLISION_FORGIVENESS;
     const playerTop    = this.playerY - 40;
     const playerBottom = this.playerY + 40;
@@ -620,7 +533,7 @@ export class GameEngine {
       const horizontalOverlap = Math.abs(obX - this.playerX) <= (obHalfW + playerHalfW);
       if (horizontalOverlap) {
         this.onObstacleHit(ob);
-        ob.y = this.height + ob.height; // remove from active play
+        ob.y = this.height + ob.height;
       }
     }
 
@@ -628,9 +541,6 @@ export class GameEngine {
       if (box.lane !== this.playerLane) continue;
       const verticalOverlap = box.y + box.height / 2 >= playerTop && box.y - box.height / 2 <= playerBottom;
       if (!verticalOverlap) continue;
-      // Boxes keep generous (full-lane-width) pickup detection — being
-      // lenient about collecting a reward box is good for the player, only
-      // obstacle damage needed the fairness fix.
       this.spawnCollectEffect(
         this.laneCenter(box.lane),
         box.y,
@@ -694,11 +604,8 @@ export class GameEngine {
   // Rendering
   // ─────────────────────────────────────────────────────────────────────────
 
-  /** Draws the animated ocean background without game entities.
-   *  Called once after construction so the canvas is never blank on the
-   *  start screen. */
   public renderIdleBackground(): void {
-    this.waveTime += 0.016; // single-frame advance for atmosphere
+    this.waveTime += 0.016;
     this.drawBackground();
     this.drawLaneSeparators();
     this.drawPlayerOnly(performance.now());
@@ -723,8 +630,6 @@ export class GameEngine {
     const w   = this.width;
     const h   = this.height;
 
-    // PERF FIX: rebuild only when dimensions changed (cache invalidated in
-    // resize()) instead of calling createLinearGradient every frame.
     if (!this.bgGradientCache) {
       const bg = ctx.createLinearGradient(0, 0, 0, h);
       bg.addColorStop(0,    '#0c1445');
@@ -736,9 +641,6 @@ export class GameEngine {
     ctx.fillStyle = this.bgGradientCache;
     ctx.fillRect(0, 0, w, h);
 
-    // PERF FIX: underwater light rays are purely decorative and rebuild
-    // 5 gradients + paths every frame. Skip entirely on low-power/mobile
-    // devices — visually minor, meaningfully cheaper per frame.
     if (!this.isLowPower) {
       ctx.save();
       for (let r = 0; r < 5; r++) {
@@ -758,7 +660,6 @@ export class GameEngine {
       ctx.restore();
     }
 
-    // Bubbles
     ctx.save();
     for (const b of this.bubbles) {
       ctx.beginPath();
@@ -769,14 +670,10 @@ export class GameEngine {
     }
     ctx.restore();
 
-    // Animated wave layers
     for (const wl of this.waveLayers) {
       ctx.save();
       ctx.beginPath();
       ctx.moveTo(0, h * wl.y);
-      // PERF FIX: step by 8px instead of 4px on low-power devices — half
-      // as many path segments for a wave shape that's visually identical
-      // at normal viewing distance.
       const step = this.isLowPower ? 8 : 4;
       for (let x = 0; x <= w; x += step) {
         ctx.lineTo(x, h * wl.y + Math.sin(x * 0.025 + wl.offset) * wl.amplitude);
@@ -789,7 +686,6 @@ export class GameEngine {
       ctx.restore();
     }
 
-    // Foam specks
     ctx.save();
     for (const f of this.foamParticles) {
       ctx.beginPath();
@@ -826,7 +722,6 @@ export class GameEngine {
     const ctx = this.ctx;
     ctx.save();
     ctx.globalAlpha = 0.15;
-    // PERF FIX: half the streak count on low-power devices.
     const count = this.isLowPower ? 4 : 8;
     for (let i = 0; i < count; i++) {
       const sx = Math.random() * this.width;
@@ -899,11 +794,9 @@ export class GameEngine {
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
     ctx.font      = '16px "Segoe UI", sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('Tap ⏸ to continue', this.width / 2, this.height / 2 + 24);
+    ctx.fillText('Tap \u23F8 to continue', this.width / 2, this.height / 2 + 24);
   }
 
-  /** Draws the player at their current position. Extracted so the idle
-   *  background render (start screen) can also show the surfboard. */
   private drawPlayerOnly(now: number): void {
     const ctx = this.ctx;
     const px  = this.playerX;
@@ -913,7 +806,6 @@ export class GameEngine {
     ctx.translate(px, py);
     ctx.rotate(this.playerTilt);
 
-    // Wake / water spray behind board
     for (let s = 0; s < 3; s++) {
       const sx       = (s - 1) * 12;
       const wakeGrad = ctx.createLinearGradient(sx, 0, sx, 30);
@@ -929,7 +821,6 @@ export class GameEngine {
       ctx.fill();
     }
 
-    // Shield glow
     if (this.state.hasShield) {
       const sp        = Math.sin(this.shieldPulse) * 0.4 + 0.6;
       const shieldGrad = ctx.createRadialGradient(0, 0, 10, 0, 0, 45);
@@ -947,13 +838,11 @@ export class GameEngine {
       ctx.stroke();
     }
 
-    // Speed boost aura
     ctx.shadowColor = now < this.state.speedBoostUntil
       ? '#10b981'
       : 'rgba(56,189,248,0.6)';
     ctx.shadowBlur = now < this.state.speedBoostUntil ? 18 : 12;
 
-    // Surfboard body
     const boardGrad = ctx.createLinearGradient(-28, -10, 28, 14);
     boardGrad.addColorStop(0,   '#f0f9ff');
     boardGrad.addColorStop(0.4, '#e0f2fe');
@@ -967,7 +856,6 @@ export class GameEngine {
     ctx.closePath();
     ctx.fill();
 
-    // Board stripe
     ctx.shadowBlur = 0;
     const stripeGrad = ctx.createLinearGradient(-20, 0, 20, 0);
     stripeGrad.addColorStop(0,   'transparent');
@@ -981,7 +869,6 @@ export class GameEngine {
     ctx.lineTo( 20, 2);
     ctx.stroke();
 
-    // Board fin
     ctx.fillStyle = '#0369a1';
     ctx.beginPath();
     ctx.moveTo( 0, 10);
@@ -990,19 +877,16 @@ export class GameEngine {
     ctx.closePath();
     ctx.fill();
 
-    // Surfer body
     ctx.fillStyle = '#1e3a8a';
     ctx.beginPath();
     ctx.ellipse(0, -8, 5, 9, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Surfer head
     ctx.beginPath();
     ctx.arc(0, -20, 5, 0, Math.PI * 2);
     ctx.fillStyle = '#fde68a';
     ctx.fill();
 
-    // Surfer arms
     ctx.strokeStyle = '#1e3a8a';
     ctx.lineWidth   = 2.5;
     ctx.lineCap     = 'round';
@@ -1028,12 +912,10 @@ export class GameEngine {
 
     switch (ob.type) {
       case 'rock': {
-        // Shadow
         ctx.beginPath();
         ctx.ellipse(0, 20, 22, 6, 0, 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(0,0,0,0.25)';
         ctx.fill();
-        // Body
         const rGrad = ctx.createRadialGradient(-5, -8, 2, 0, 0, 22);
         rGrad.addColorStop(0,   '#9ca3af');
         rGrad.addColorStop(0.5, '#6b7280');
@@ -1046,23 +928,20 @@ export class GameEngine {
         ctx.bezierCurveTo(-22,  -8, -14, -20,  0, -22);
         ctx.closePath();
         ctx.fill();
-        // Highlight
         ctx.fillStyle = 'rgba(255,255,255,0.15)';
         ctx.beginPath();
         ctx.ellipse(-4, -10, 7, 4, -0.5, 0, Math.PI * 2);
         ctx.fill();
-        // Icon
         ctx.font          = '20px serif';
         ctx.textAlign     = 'center';
         ctx.textBaseline  = 'middle';
-        ctx.fillText('🪨', 0, -2);
+        ctx.fillText('\uD83E\uDEA8', 0, -2);
         break;
       }
 
       case 'shark': {
         ctx.shadowColor = '#374151';
         ctx.shadowBlur  = 10;
-        // Body
         const sGrad = ctx.createLinearGradient(-20, -15, 20, 15);
         sGrad.addColorStop(0, '#4b5563');
         sGrad.addColorStop(1, '#1f2937');
@@ -1070,7 +949,6 @@ export class GameEngine {
         ctx.beginPath();
         ctx.ellipse(0, 5, 20, 14, 0, 0, Math.PI * 2);
         ctx.fill();
-        // Dorsal fin
         ctx.fillStyle = '#374151';
         ctx.beginPath();
         ctx.moveTo(-4, -14);
@@ -1078,21 +956,18 @@ export class GameEngine {
         ctx.lineTo(12, -14);
         ctx.closePath();
         ctx.fill();
-        // Eye white
         ctx.fillStyle = 'white';
         ctx.beginPath();
         ctx.arc(10, 2, 4, 0, Math.PI * 2);
         ctx.fill();
-        // Pupil
         ctx.fillStyle = '#1f2937';
         ctx.beginPath();
         ctx.arc(11, 2, 2, 0, Math.PI * 2);
         ctx.fill();
-        // Icon
         ctx.font         = '22px serif';
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('🦈', 0, -2);
+        ctx.fillText('\uD83E\uDD88', 0, -2);
         ctx.shadowBlur = 0;
         break;
       }
@@ -1100,7 +975,6 @@ export class GameEngine {
       case 'jellyfish': {
         ctx.shadowColor = '#a855f7';
         ctx.shadowBlur  = 15;
-        // Bell
         const jGrad = ctx.createRadialGradient(0, -5, 2, 0, -5, 20);
         jGrad.addColorStop(0,   'rgba(192,132,252,0.9)');
         jGrad.addColorStop(0.6, 'rgba(168,85,247,0.75)');
@@ -1110,7 +984,6 @@ export class GameEngine {
         ctx.arc(0, -5, 20, Math.PI, 0);
         ctx.closePath();
         ctx.fill();
-        // Tentacles
         ctx.strokeStyle = 'rgba(192,132,252,0.7)';
         ctx.lineWidth   = 1.5;
         for (let t = -3; t <= 3; t++) {
@@ -1127,11 +1000,10 @@ export class GameEngine {
           }
           ctx.stroke();
         }
-        // Icon
         ctx.font         = '22px serif';
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('🪼', 0, -5);
+        ctx.fillText('\uD83E\uDEBC', 0, -5);
         ctx.shadowBlur = 0;
         break;
       }
@@ -1150,16 +1022,14 @@ export class GameEngine {
         ctx.bezierCurveTo( 12, -16,  22,  -4, 28,  18);
         ctx.closePath();
         ctx.fill();
-        // Foam crest
         ctx.fillStyle = 'rgba(255,255,255,0.6)';
         ctx.beginPath();
         ctx.ellipse(-6, -18, 12, 4, -0.3, 0, Math.PI * 2);
         ctx.fill();
-        // Icon
         ctx.font         = '22px serif';
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('🌊', 0, -2);
+        ctx.fillText('\uD83C\uDF0A', 0, -2);
         ctx.shadowBlur = 0;
         break;
       }
@@ -1180,9 +1050,7 @@ export class GameEngine {
     ctx.translate(x, box.y + floatY);
     ctx.scale(pulse, pulse);
 
-    // Glow halo
     const glowGrad = ctx.createRadialGradient(0, 0, 4, 0, 0, 28);
-    // Build a valid rgba from the hex glow color
     const r = parseInt(glowColor.slice(1, 3), 16);
     const g = parseInt(glowColor.slice(3, 5), 16);
     const b = parseInt(glowColor.slice(5, 7), 16);
@@ -1193,7 +1061,6 @@ export class GameEngine {
     ctx.arc(0, 0, 28, 0, Math.PI * 2);
     ctx.fill();
 
-    // Box
     ctx.fillStyle  = glowColor;
     ctx.shadowColor = glowColor;
     ctx.shadowBlur  = 14;
@@ -1202,13 +1069,11 @@ export class GameEngine {
     ctx.fill();
     ctx.shadowBlur = 0;
 
-    // Inner highlight
     ctx.fillStyle = 'rgba(255,255,255,0.2)';
     ctx.beginPath();
     ctx.roundRect(-14, -14, 28, 14, 5);
     ctx.fill();
 
-    // Icon
     ctx.font         = '20px serif';
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
@@ -1219,14 +1084,14 @@ export class GameEngine {
 
   private boxEmoji(type: BoxType): string {
     const map: Record<BoxType, string> = {
-      coins:    '🪙',
-      shield:   '🛡️',
-      magnet:   '🧲',
-      speed:    '⚡',
-      combo:    '🔥',
-      coinCut:  '💀',
-      freeze:   '❄️',
-      slowWave: '🌀',
+      coins:    '\uD83E\uDE99',  // 🪙
+      shield:   '\uD83D\uDEE1\uFE0F',  // 🛡️
+      magnet:   '\uD83E\uDDF2',  // 🧲
+      speed:    '\u26A1',         // ⚡
+      combo:    '\uD83D\uDD25',   // 🔥
+      coinCut:  '\uD83D\uDC80',   // 💀
+      freeze:   '\u2744\uFE0F',   // ❄️
+      slowWave: '\uD83C\uDF00',   // 🌀
     };
     return map[type];
   }

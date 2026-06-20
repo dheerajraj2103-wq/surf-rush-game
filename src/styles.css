@@ -32,6 +32,7 @@
   --red:       #ef4444;
   --red-dim:   rgba(239, 68, 68, 0.18);
   --purple:    #a855f7;
+  --pink:      #ec4899;
 
   /* Glass surfaces */
   --glass-1: rgba(255, 255, 255, 0.04);
@@ -77,6 +78,20 @@ body {
   overflow-x: hidden;
 }
 
+/* ─── Emoji icon helper ───────────────────────────────────────────────────────
+   Forces emoji codepoints to render as colorful emoji glyphs (not text)
+   on every browser including Chrome Android and Firefox.
+   Apply .emoji-icon to any <span> wrapping an emoji character. */
+.emoji-icon {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji",
+               "Twemoji Mozilla", "Android Emoji", "EmojiSymbols", sans-serif;
+  font-style: normal;
+  font-variant-emoji: emoji;
+  display: inline-block;
+  line-height: 1;
+  vertical-align: middle;
+}
+
 /* ─────────────────────────────────────────────
    LAYOUT SHELL
 ───────────────────────────────────────────── */
@@ -108,7 +123,6 @@ body {
   box-shadow: 0 2px 40px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255,255,255,0.05);
 }
 
-/* Brand */
 .brand {
   display: flex;
   align-items: center;
@@ -148,7 +162,6 @@ body {
   margin-top: 1px;
 }
 
-/* Top-right controls */
 .topbar-right {
   display: flex;
   align-items: center;
@@ -157,7 +170,6 @@ body {
   justify-content: flex-end;
 }
 
-/* Rules button */
 .rules-btn {
   display: flex;
   align-items: center;
@@ -180,7 +192,6 @@ body {
   color: var(--cyan);
 }
 
-/* Wallet button */
 .wallet-btn {
   display: flex;
   align-items: center;
@@ -245,7 +256,7 @@ body {
 }
 
 /* ─────────────────────────────────────────────
-   WALLET PANEL (dedicated card, shown when connected)
+   WALLET PANEL
 ───────────────────────────────────────────── */
 .wallet-panel {
   width: 100%;
@@ -351,20 +362,6 @@ body {
 }
 
 /* ─────────────────────────────────────────────
-   MAIN CONTENT GRID
-───────────────────────────────────────────── */
-.content-grid {
-  display: grid;
-  grid-template-columns: 1fr 340px;
-  gap: 14px;
-  align-items: start;
-}
-
-.content-grid.full-width {
-  grid-template-columns: 1fr;
-}
-
-/* ─────────────────────────────────────────────
    GAME AREA
 ───────────────────────────────────────────── */
 .game-area {
@@ -380,9 +377,6 @@ body {
   min-height: 1px;
 }
 
-/* When the game is over, let the area shrink to fit the modal content
-   instead of being held open by the canvas height. The overlay covers
-   everything so the canvas beneath doesn't need to render or receive events. */
 .game-area--gameover {
   height: auto !important;
   min-height: 0 !important;
@@ -398,33 +392,32 @@ body {
   height: 100%;
   position: absolute;
   inset: 0;
-  z-index: 0;        /* canvas always behind overlays */
-  pointer-events: none; /* never intercept clicks — game uses its own listeners */
+  z-index: 0;
+  pointer-events: none;
 }
 
 /* ─────────────────────────────────────────────
-   OVERLAYS (start / gameover)
+   OVERLAYS
 ───────────────────────────────────────────── */
 .overlay {
   position: relative;
-  z-index: 1;        /* above canvas (z-index: 0) */
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 20px;
   width: 100%;
-  pointer-events: none; /* overlay background itself doesn't need clicks */
+  pointer-events: none;
 }
 
-/* ── Start screen ── */
 .start-overlay {
   background: linear-gradient(180deg, rgba(2,9,22,0.65) 0%, rgba(5,13,31,0.85) 100%);
   backdrop-filter: blur(2px);
-  pointer-events: all; /* start overlay needs to catch touches for swipe */
+  pointer-events: all;
 }
 
 .start-content {
-  pointer-events: all; /* ensure buttons inside are clickable */
+  pointer-events: all;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -445,6 +438,8 @@ body {
   font-size: 28px;
   filter: drop-shadow(0 0 12px rgba(34,211,238,0.7));
   animation: wave-bob 2.5s ease-in-out infinite;
+  display: flex;
+  gap: 4px;
 }
 
 @keyframes wave-bob {
@@ -539,7 +534,6 @@ body {
   transform: translateY(0);
 }
 
-/* Instructions strip under start */
 .start-instructions {
   display: flex;
   gap: 16px;
@@ -565,34 +559,34 @@ body {
   color: var(--text-secondary);
 }
 
-/* ── Game over overlay ── */
+/* ─── Game over overlay ──────────────────────────────────────────────────── */
 .gameover-overlay {
   background: rgba(2, 9, 22, 0.92);
   backdrop-filter: blur(8px);
   overflow-y: auto;
   align-items: flex-start;
   padding: 16px 20px 20px;
-  pointer-events: all; /* overlay background re-enabled — it covers full area */
+  pointer-events: all;
 }
 
 .gameover-modal {
   background: linear-gradient(145deg, rgba(34,211,238,0.07) 0%, rgba(7,26,53,0.96) 100%);
   border: 1px solid var(--border-cyan);
   border-radius: var(--radius-xl);
-  padding: 24px 24px 22px;
+  padding: 28px 24px 22px;
   width: 100%;
-  max-width: 440px;
+  max-width: 460px;
   display: flex;
   flex-direction: column;
   gap: 14px;
   position: relative;
-  z-index: 2;        /* above overlay backdrop */
-  pointer-events: all; /* all buttons inside must be clickable */
+  z-index: 2;
+  pointer-events: all;
   box-shadow:
     0 40px 100px rgba(0,0,0,0.9),
     0 0 60px rgba(34,211,238,0.12),
     inset 0 1px 0 rgba(255,255,255,0.08);
-  position: relative;
+  overflow-x: hidden;
 }
 
 .new-record-banner {
@@ -664,6 +658,9 @@ body {
   font-size: 20px;
   font-weight: 700;
   color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .score-highlight {
@@ -674,6 +671,114 @@ body {
   filter: drop-shadow(0 0 8px rgba(34,211,238,0.4));
 }
 
+.coins-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 8px 18px;
+  border-top: 1px solid var(--border-1);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  line-height: 1.4;
+}
+
+/* ─── Extra Life Card ─────────────────────────────────────────────────────── */
+.extra-life-card {
+  background: rgba(236, 72, 153, 0.08);
+  border: 1px solid rgba(236, 72, 153, 0.3);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.extra-life-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.extra-life-header .emoji-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.extra-life-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #f9a8d4;
+  flex: 1;
+}
+
+.extra-life-lives {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: rgba(236,72,153,0.12);
+  border: 1px solid rgba(236,72,153,0.25);
+  border-radius: 8px;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+.extra-life-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.extra-life-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.extra-life-badge {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(255,255,255,0.2);
+  border-radius: 10px;
+  padding: 2px 8px;
+}
+
+.extra-life-cost-badge {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 700;
+  background: rgba(0,0,0,0.2);
+  border-radius: 10px;
+  padding: 2px 8px;
+}
+
+.extra-life-short {
+  font-size: 10px;
+  opacity: 0.75;
+  margin-left: 4px;
+}
+
+/* Buy Life action button */
+.buy-life-action {
+  background: linear-gradient(135deg, rgba(236,72,153,0.25) 0%, rgba(168,85,247,0.25) 100%);
+  border: 1px solid rgba(236, 72, 153, 0.5) !important;
+  color: #f9a8d4 !important;
+}
+
+.buy-life-action:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(236,72,153,0.4) 0%, rgba(168,85,247,0.4) 100%);
+  border-color: rgba(236,72,153,0.7) !important;
+  transform: translateY(-1px);
+}
+
+.buy-life-action--disabled {
+  background: var(--glass-2) !important;
+  border: 1px solid var(--border-1) !important;
+  color: var(--text-muted) !important;
+  cursor: not-allowed !important;
+}
+
 /* Daily reward card */
 .daily-reward-card {
   background: rgba(245,158,11,0.08);
@@ -682,7 +787,7 @@ body {
   padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 
 .dr-header {
@@ -707,6 +812,12 @@ body {
 .dr-desc {
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.dr-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
 }
 
 /* Game over actions */
@@ -741,6 +852,14 @@ body {
   background: var(--red-dim);
   border: 1px solid rgba(239, 68, 68, 0.35);
   color: #fca5a5;
+}
+
+/* On-chain unavailable note */
+.onchain-unavailable-note {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.4;
 }
 
 /* ─────────────────────────────────────────────
@@ -788,6 +907,9 @@ body {
   font-size: 18px;
   font-weight: 700;
   color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .score-val { color: var(--cyan); }
@@ -865,16 +987,7 @@ body {
 }
 
 /* ─────────────────────────────────────────────
-   SIDEBAR (right column)
-───────────────────────────────────────────── */
-.sidebar {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-/* ─────────────────────────────────────────────
-   SECTION CARDS
+   SECTION CARDS (shared base)
 ───────────────────────────────────────────── */
 .section-card {
   background: var(--glass-1);
@@ -885,12 +998,43 @@ body {
   box-shadow: 0 4px 30px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.04);
 }
 
+/* ─── Section header (button variant for collapsible) ──────────────────────── */
 .section-header {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 16px 20px;
   border-bottom: 1px solid var(--border-1);
+}
+
+/* When the header is also a button (collapsible sections) */
+.section-header-btn {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border-1);
+  border-radius: 0;
+  cursor: pointer;
+  text-align: left;
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: inherit;
+  transition: background var(--t-fast);
+}
+
+.section-header-btn:hover {
+  background: var(--glass-2);
+}
+
+/* Chevron indicator for collapsible sections */
+.collapse-chevron {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: var(--t-fast);
 }
 
 .section-icon {
@@ -902,6 +1046,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .section-title {
@@ -914,14 +1059,109 @@ body {
 }
 
 .section-badge {
-  margin-left: auto;
   font-size: 11px;
   font-weight: 600;
   color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* ─────────────────────────────────────────────
-   LEADERBOARD
+   COIN SHOP PANEL
+───────────────────────────────────────────── */
+.coin-shop-panel {}
+
+.coin-shop-body {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.coin-shop-intro {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.coin-shop-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shop-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--glass-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  transition: var(--t-fast);
+}
+
+.shop-item:not(.shop-item-locked):hover {
+  background: var(--glass-3);
+  border-color: var(--border-cyan);
+}
+
+.shop-item-locked {
+  opacity: 0.5;
+}
+
+.shop-item-icon {
+  font-size: 22px;
+  flex-shrink: 0;
+  width: 34px;
+  text-align: center;
+}
+
+.shop-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.shop-item-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.shop-item-desc {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
+.shop-item-cost {
+  font-family: 'Orbitron', monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--amber);
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.shop-item-cost--locked {
+  font-family: 'Inter', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--glass-2);
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  padding: 3px 8px;
+}
+
+/* ─────────────────────────────────────────────
+   LEADERBOARD (collapsible)
 ───────────────────────────────────────────── */
 .leaderboard {}
 
@@ -956,7 +1196,6 @@ body {
 .lb-third  { background: rgba(180,120,60,0.04); }
 
 .lb-rank {
-  font-size: 15px;
   min-width: 28px;
   text-align: center;
   flex-shrink: 0;
@@ -1005,10 +1244,14 @@ body {
   font-size: 11px;
   color: var(--amber);
   margin-top: 1px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
 }
 
 /* ─────────────────────────────────────────────
-   ACTION BUTTONS (reusable)
+   ACTION BUTTONS
 ───────────────────────────────────────────── */
 .action-btn {
   width: 100%;
@@ -1024,8 +1267,8 @@ body {
   transition: var(--t-base);
   border: none;
   letter-spacing: 0.02em;
-  pointer-events: auto; /* override any inherited pointer-events: none from overlay wrapper */
-  position: relative;   /* ensure button sits in its own stacking context */
+  pointer-events: auto;
+  position: relative;
   z-index: 1;
 }
 
@@ -1046,10 +1289,6 @@ body {
   box-shadow: 0 6px 28px rgba(16, 185, 129, 0.55);
 }
 
-/* UX FIX (reviewer C — action hierarchy): Surf Again is the expected,
-   low-friction next step, so it gets a clear but visually quieter outline
-   treatment — present and easy to find, but not competing with Claim
-   Reward for attention. */
 .secondary-action {
   background: var(--glass-2);
   border: 1px solid var(--border-2);
@@ -1062,9 +1301,6 @@ body {
   transform: translateY(-1px);
 }
 
-/* UX FIX (reviewer C — action hierarchy): Share is the lowest-priority of
-   the three primary actions — quiet text-on-glass treatment, no border, no
-   shadow, so it doesn't visually compete with Claim or Surf Again. */
 .tertiary-action {
   background: transparent;
   border: 1px solid transparent;
@@ -1078,41 +1314,6 @@ body {
   background: rgba(0, 136, 204, 0.1);
 }
 
-.telegram-action {
-  background: rgba(0, 136, 204, 0.15);
-  border: 1px solid rgba(0, 136, 204, 0.4);
-  color: #7dd3fc;
-}
-
-.telegram-action:hover:not(:disabled) {
-  background: rgba(0, 136, 204, 0.25);
-}
-
-.chain-action {
-  background: rgba(245, 158, 11, 0.12);
-  border: 1px solid rgba(245, 158, 11, 0.4);
-  color: #fcd34d;
-}
-
-.chain-action:hover:not(:disabled) {
-  background: rgba(245, 158, 11, 0.2);
-}
-
-.wallet-action {
-  background: var(--blue-dim);
-  border: 1px solid rgba(56, 189, 248, 0.4);
-  color: var(--blue);
-}
-
-.wallet-action:hover:not(:disabled) {
-  background: rgba(56, 189, 248, 0.22);
-}
-
-/* UX FIX (reviewer C — action hierarchy): Save Score On-Chain is preserved
-   in full (it's a real working feature) but demoted below the three
-   primary actions as a small link-style control, since it wasn't part of
-   the Claim / Surf Again / Share hierarchy the reviewer specified and
-   shouldn't visually compete with it. */
 .gameover-secondary-actions {
   display: flex;
   justify-content: center;
@@ -1151,43 +1352,11 @@ body {
   border-top-color: transparent;
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
 }
 
 @keyframes spin {
   to { transform: rotate(360deg); }
-}
-
-/* ─────────────────────────────────────────────
-   STATS PANEL (sidebar)
-───────────────────────────────────────────── */
-.stats-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1px;
-  background: var(--border-1);
-}
-
-.stat-cell {
-  background: var(--ocean-1);
-  padding: 14px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.stat-label {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  color: var(--text-muted);
-  text-transform: uppercase;
-}
-
-.stat-value {
-  font-family: 'Orbitron', monospace;
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--text-primary);
 }
 
 /* ─────────────────────────────────────────────
@@ -1331,9 +1500,11 @@ body {
 }
 
 .modal-item-icon {
-  font-size: 14px;
+  font-size: 16px;
   flex-shrink: 0;
   margin-top: 1px;
+  min-width: 20px;
+  text-align: center;
 }
 
 .modal-powerup-grid {
@@ -1353,7 +1524,7 @@ body {
   font-size: 12px;
 }
 
-.modal-powerup-item .pu-icon { font-size: 18px; }
+.modal-powerup-item .pu-icon { font-size: 20px; flex-shrink: 0; }
 .modal-powerup-item .pu-info { min-width: 0; }
 .modal-powerup-item .pu-name { font-weight: 600; color: var(--text-primary); display: block; }
 .modal-powerup-item .pu-desc { color: var(--text-muted); font-size: 11px; display: block; margin-top: 1px; }
@@ -1389,21 +1560,10 @@ body {
    RESPONSIVE
 ───────────────────────────────────────────── */
 @media (max-width: 760px) {
-  .content-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .sidebar {
-    flex-direction: column;
-  }
-
   .app { gap: 12px; padding: 10px 12px 16px; }
-
   .topbar { padding: 10px 14px; }
   .brand-title { font-size: 15px; }
-
-  .gameover-modal { padding: 28px 20px 22px; }
-
+  .gameover-modal { padding: 28px 16px 20px; }
   .modal-powerup-grid { grid-template-columns: 1fr; }
 }
 
@@ -1415,13 +1575,7 @@ body {
   .wallet-panel-actions { flex-wrap: wrap; }
   .modal-content { padding: 18px 18px 22px; }
 
-  /* MOBILE FIX (reviewer E — Android/MetaMask Mobile): on very narrow
-     viewports the topbar previously kept brand + How to Play + wallet
-     error chip + Connect button all on one flex row, which on phones
-     ~360px wide (common on Android/MetaMask Mobile's in-app browser)
-     pushed the Connect button hard against the inline error text. Letting
-     the right-hand cluster take its own full-width row keeps every control
-     comfortably tappable and never visually overlapping. */
+  /* Topbar wraps on narrow screens */
   .topbar {
     flex-wrap: wrap;
   }
@@ -1433,13 +1587,19 @@ body {
     max-width: none;
     flex: 1 1 auto;
   }
-
-  /* MOBILE FIX: when the wallet panel's action buttons wrap to their own
-     line on a narrow screen, stretch them to fill the row evenly instead
-     of leaving them left-aligned with empty space beside the address. */
   .wallet-panel-actions {
     width: 100%;
     justify-content: flex-end;
+  }
+
+  /* Extra life buttons stack vertically on tiny screens */
+  .extra-life-actions {
+    flex-direction: column;
+  }
+
+  /* Score card value smaller on mobile */
+  .sc-value {
+    font-size: 16px;
   }
 }
 
@@ -1453,7 +1613,6 @@ body {
 
 .fade-in { animation: fade-in 0.35s var(--ease) both; }
 
-/* Copy feedback */
 .copy-feedback {
   font-size: 11px;
   color: var(--green);
