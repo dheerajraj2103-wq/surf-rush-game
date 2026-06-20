@@ -13,11 +13,11 @@ import {
   isMobileDevice,
   getWalletName,
   saveScoreOnChain,
-  claimRewardOnChain,
   subscribeToChainChanges,
   WalletState,
   TxPhase,
-  TX_PHASE_LABEL
+  TX_PHASE_LABEL,
+  REWARD_CONTRACT_DEPLOYED
 } from './wallet';
 import { initTelegram, getTelegramUser, shareScore } from './telegram';
 
@@ -148,6 +148,9 @@ interface GameOverOverlayProps {
   isNewRecord: boolean;
   timeUntilNextClaim: string;
   canClaimReward: boolean;
+  claimLoading: boolean;
+  claimMessage: string | null;
+  claimSuccess: boolean;
   txLoading: boolean;
   txPhase: TxPhase;
   txMessage: string | null;
@@ -166,6 +169,9 @@ function GameOverOverlay({
   isNewRecord,
   timeUntilNextClaim,
   canClaimReward,
+  claimLoading,
+  claimMessage,
+  claimSuccess,
   txLoading,
   txPhase,
   txMessage,
@@ -216,55 +222,54 @@ function GameOverOverlay({
           </p>
         </div>
 
-        {/* Daily reward — shows prompt to connect wallet if not connected */}
+        {/* FIX (critical): Daily Reward is now a fully local/offline feature —
+            no wallet connection, no MetaMask popup, no transaction of any
+            kind. It never depended on a real reward contract to begin with
+            (it was always +500 in-game coins, never an on-chain transfer),
+            so routing it through claimRewardOnChain() against a zero-address
+            placeholder was never correct. This card no longer mentions
+            wallets or on-chain transactions at all. */}
         <div className="daily-reward-card">
           <div className="dr-header">
             <span>🎁 Daily Reward</span>
-            <span className="dr-timer">{timeUntilNextClaim}</span>
+            <span className="dr-timer">{canClaimReward ? 'Ready now!' : timeUntilNextClaim}</span>
           </div>
           <p className="dr-desc">+500 coins · Claimable once every 24 hours</p>
-          {/* FIX: clarify this claim is an on-chain transaction in itself —
-              there is no separate "withdraw" step, since none exists in the
-              contract ABI. */}
           <p style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px', lineHeight: 1.4 }}>
-            Claiming submits an on-chain transaction directly to your wallet — no separate withdrawal step.
+            This is a local in-game reward — no wallet or transaction required.
           </p>
+
+          <button
+            className="action-btn primary-action"
+            style={{ marginTop: '10px' }}
+            onClick={onClaimReward}
+            type="button"
+            disabled={claimLoading || !canClaimReward}
+          >
+            {claimLoading
+              ? <><span className="spinner" /> Claiming…</>
+              : canClaimReward
+                ? '🎁 Claim Reward'
+                : `⏳ Next claim in ${timeUntilNextClaim}`}
+          </button>
+
+          {/* FIX (task 3 & 6): a dedicated, always-clearing status line for
+              the local claim action only — entirely separate from txPhase/
+              txMessage (which now belong solely to the on-chain Save Score
+              flow), so a Save Score error can never bleed into the Daily
+              Reward card and vice versa. */}
+          {claimMessage && (
+            <div className={`tx-status ${claimSuccess ? 'tx-success' : 'tx-error'}`} style={{ marginTop: '8px' }}>
+              {claimMessage}
+            </div>
+          )}
         </div>
 
-        {/* UX FIX (reviewer C — clear action hierarchy):
-            1. Claim Reward  — primary   (dominant green, top)
-            2. Surf Again    — secondary (neutral outline, middle)
-            3. Share         — tertiary  (quiet text-style, bottom)
-            Save Score On-Chain is preserved in full but demoted to a small
-            link-style action beneath the three primary actions — it's a
-            real, working feature (per "preserve all reward functionality")
-            but was never one of the three hierarchy items the reviewer
-            asked for, so it shouldn't visually compete with them. */}
+        {/* UX (action hierarchy): Surf Again / Share remain the two primary
+            navigation actions on every run. Claim Reward now lives in the
+            Daily Reward card above since it's a standalone local action,
+            not a wallet-dependent transaction. */}
         <div className="gameover-actions">
-          {wallet.signer ? (
-            <button
-              className="action-btn primary-action"
-              onClick={onClaimReward}
-              type="button"
-              disabled={txLoading || !canClaimReward}
-            >
-              {txLoading
-                ? <><span className="spinner" /> {statusLabel || 'Working…'}</>
-                : canClaimReward
-                  ? '🎁 Claim Reward'
-                  : `⏳ Next claim in ${timeUntilNextClaim}`}
-            </button>
-          ) : (
-            <button
-              className="action-btn primary-action"
-              onClick={onConnectWallet}
-              type="button"
-              disabled={txLoading}
-            >
-              {txLoading ? <><span className="spinner" /> {statusLabel || 'Connecting…'}</> : '◈ Connect Wallet to Claim'}
-            </button>
-          )}
-
           <button className="action-btn secondary-action" onClick={onRestart} type="button">
             ↺ Surf Again
           </button>
@@ -274,29 +279,41 @@ function GameOverOverlay({
           </button>
         </div>
 
+        {/* FIX (task 4 & 5): Save Score On-Chain is only ever shown as an
+            actionable button when REWARD_CONTRACT_DEPLOYED is true. With no
+            deployed contract, a disabled-but-visible button invites "why
+            won't this work?" — a plain, permanent explanatory sentence is
+            clearer and matches the required message exactly. */}
         <div className="gameover-secondary-actions">
-          {wallet.signer ? (
-            <button
-              className="link-action"
-              onClick={onSaveOnChain}
-              type="button"
-              disabled={txLoading}
-            >
-              {txLoading ? <span className="spinner" /> : '⛓️ Save Score On-Chain'}
-            </button>
+          {REWARD_CONTRACT_DEPLOYED ? (
+            wallet.signer ? (
+              <button
+                className="link-action"
+                onClick={onSaveOnChain}
+                type="button"
+                disabled={txLoading}
+              >
+                {txLoading ? <span className="spinner" /> : '⛓️ Save Score On-Chain'}
+              </button>
+            ) : (
+              <button
+                className="link-action"
+                onClick={onConnectWallet}
+                type="button"
+              >
+                ◈ Connect Wallet to Save Score
+              </button>
+            )
           ) : (
-            <button
-              className="link-action"
-              onClick={onConnectWallet}
-              type="button"
-              disabled={txLoading}
-            >
-              {txLoading ? <span className="spinner" /> : '◈ Connect Wallet to Save Score'}
-            </button>
+            <p className="onchain-unavailable-note">
+              On-chain saving is currently unavailable because no deployed contract is configured.
+            </p>
           )}
         </div>
 
-        {txPhase !== 'idle' && (txMessage || statusLabel) && (
+        {/* On-chain Save Score status only — Daily Reward has its own
+            status line above and never touches txPhase/txMessage. */}
+        {REWARD_CONTRACT_DEPLOYED && txPhase !== 'idle' && (txMessage || statusLabel) && (
           <div className={`tx-status ${statusClass}`}>
             {txPhase === 'awaiting-approval' || txPhase === 'submitted'
               ? <span className="spinner" style={{ width: 12, height: 12, borderWidth: 2, marginRight: 6, verticalAlign: 'middle' }} />
@@ -308,6 +325,7 @@ function GameOverOverlay({
     </div>
   );
 }
+
 
 // ─── Leaderboard ──────────────────────────────────────────────────────────────
 interface LeaderboardProps {
@@ -603,6 +621,17 @@ export default function App() {
 
   const canClaimReward = !lastClaimTime || Date.now() - lastClaimTime >= 24 * 60 * 60 * 1000;
 
+  // FIX (critical, task 3 & 6): Daily Reward is now a fully local feature —
+  // its loading/message/success state is intentionally separate from
+  // connectPhase/txPhase/txMessage (which remain scoped to wallet-connect
+  // and the on-chain Save Score flow). This guarantees the claim button can
+  // never inherit a stuck or unrelated status from another flow, and that
+  // an on-chain Save Score failure can never show up under Daily Reward.
+  const [claimLoading, setClaimLoading] = useState(false);
+  const [claimMessage, setClaimMessage] = useState<string | null>(null);
+  const [claimSuccess, setClaimSuccess] = useState(false);
+  const claimInFlightRef = useRef(false);
+
   // ── Telegram + leaderboard init ────────────────────────────────────────────
   useEffect(() => {
     initTelegram();
@@ -862,6 +891,16 @@ export default function App() {
     // saveScoreOnChain transactions back to back.
     if (txInFlightRef.current) return;
 
+    // FIX (task 4 & 5, defense-in-depth): the UI already hides this action
+    // entirely when REWARD_CONTRACT_DEPLOYED is false, but the handler
+    // checks too — the same pattern wallet.ts uses internally — so this
+    // can never fire even if called some other way.
+    if (!REWARD_CONTRACT_DEPLOYED) {
+      setTxPhase('failed');
+      setTxMessage('On-chain saving is currently unavailable because no deployed contract is configured.');
+      return;
+    }
+
     const signer = walletRef.current.signer;
     if (!signer) {
       setTxPhase('failed');
@@ -899,56 +938,53 @@ export default function App() {
   const canClaimRewardRef = useRef(canClaimReward);
   useEffect(() => { canClaimRewardRef.current = canClaimReward; }, [canClaimReward]);
 
-  const handleClaimReward = useCallback(async () => {
-    // BUGFIX (root cause #2): guard against a double-tap firing two
-    // claimRewardOnChain transactions back to back — without this, a fast
-    // double-click could submit two on-chain claims before the first
-    // resolves and disabled the button.
-    if (txInFlightRef.current) return;
+  // FIX (critical — tasks 1, 2, 3, 6): Daily Reward claiming used to call
+  // claimRewardOnChain(signer), which (even with wallet.ts's guard) meant
+  // a wallet had to be connected first and would still show transaction-
+  // style status text on rejection. The reward was always +500 in-game
+  // coins — never an on-chain transfer — so there was never a reason to
+  // require a wallet or open MetaMask for it. This is now a synchronous
+  // local action: no signer, no contract call, no network request of any
+  // kind. It cannot fail the way a transaction can, so the old generic
+  // "Transaction failed. Please try again." message is gone entirely —
+  // there is no failure mode here except "already claimed today", which
+  // gets its own specific, accurate message instead.
+  const handleClaimReward = useCallback(() => {
+    // BUGFIX (root cause #2 pattern, applied locally): guard against a
+    // double-tap awarding the reward twice before React re-renders the
+    // disabled state.
+    if (claimInFlightRef.current) return;
+    claimInFlightRef.current = true;
+    setClaimLoading(true);
 
-    const signer = walletRef.current.signer;
-
-    if (!signer) {
-      // User clicked "Claim Reward" without a wallet connected.
-      // Show clear in-modal feedback instead of silently failing.
-      setTxPhase('failed');
-      setTxMessage('Connect your wallet first, then claim your reward.');
-      return;
-    }
-
-    if (!canClaimRewardRef.current) {
-      setTxPhase('failed');
-      setTxMessage('Daily reward already claimed. Check back in 24 hours.');
-      return;
-    }
-
-    txInFlightRef.current = true;
     try {
-      setTxPhase('awaiting-approval');
-      setTxMessage('Approve the transaction in your wallet…');
-      const hash = await claimRewardOnChain(signer);
-      setTxPhase('submitted');
-      setTxMessage(`Transaction submitted: ${shortenAddress(hash)}`);
-      const now  = Date.now();
+      if (!canClaimRewardRef.current) {
+        setClaimSuccess(false);
+        setClaimMessage('Daily reward already claimed. Check back in 24 hours.');
+        return;
+      }
+
+      // Award +500 coins locally. There is no persistent cross-run coin
+      // balance elsewhere in this app (each run's coins are independent
+      // and shown only on that run's Game Over screen / leaderboard
+      // entry), so the reward is applied to the score currently on
+      // screen — visible immediately, with no separate balance to track.
+      setFinalCoins((prev) => prev + 500);
+
+      const now = Date.now();
       localStorage.setItem('surfRushLastClaim', String(now));
       setLastClaimTime(now);
-      // claimRewardOnChain() already awaits confirmation (see wallet.ts
-      // waitForTx), so by the time we reach here it's actually confirmed.
-      setTxPhase('confirmed');
-      setTxMessage(`Reward claimed! Tx: ${shortenAddress(hash)}`);
-    } catch (err: any) {
-      setTxPhase('failed');
-      if (err.code === 4001 || err.message?.includes('rejected') || err.message?.includes('denied') || err.message?.includes('User rejected')) {
-        setTxMessage('Transaction cancelled.');
-      } else {
-        setTxMessage('Transaction failed. Please try again.');
-      }
+
+      setClaimSuccess(true);
+      setClaimMessage('Daily reward claimed successfully.');
     } finally {
-      // FIX: guarantees the in-flight guard always clears and the spinner
-      // never gets permanently stuck, regardless of which path was taken.
-      txInFlightRef.current = false;
+      // FIX (task 6): always clears, synchronously — there is no async gap
+      // here for the UI to get stuck in, but the same guaranteed-cleanup
+      // pattern is kept for consistency with the other handlers.
+      setClaimLoading(false);
+      claimInFlightRef.current = false;
     }
-  }, []); // no deps — reads everything from refs
+  }, []); // no deps — reads canClaimReward from a ref, writes via setters
 
   const handleShareScore = useCallback(() => {
     shareScore(finalScore, TELEGRAM_BOT_USERNAME);
