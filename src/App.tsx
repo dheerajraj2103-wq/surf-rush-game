@@ -4,7 +4,23 @@ import {
   GameState,
   LeaderboardEntry,
   getLeaderboard,
-  saveToLeaderboard
+  saveToLeaderboard,
+  getProfile,
+  saveProfile,
+  PlayerProfile,
+  getAchievements,
+  unlockAchievement,
+  Achievement,
+  AchievementId,
+  getMissions,
+  saveMissions,
+  Mission,
+  getStreak,
+  updateStreak,
+  StreakData,
+  getShopPurchases,
+  saveShopPurchases,
+  ShopPurchase,
 } from './game';
 import {
   connectWallet,
@@ -25,17 +41,16 @@ type Screen = 'start' | 'playing' | 'gameover';
 
 const TELEGRAM_BOT_USERNAME = 'your_bot_username';
 
-// Cost in coins to purchase one extra life
-const EXTRA_LIFE_COST = 100;
+const EXTRA_LIFE_COST   = 100;
+const SHIELD_COST       = 200;
+const MAGNET_COST       = 150;
+const MULTIPLIER_COST   = 250;
 
 function shortenAddress(address: string): string {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
-// ─── SVG Icon components — cross-browser, no Unicode/emoji rendering issues ───
-// All icons use inline SVG for guaranteed rendering on Chrome, Firefox, Brave,
-// Android and iOS without any font or codepoint dependencies.
-
+// ─── SVG Icon components ──────────────────────────────────────────────────────
 interface IconProps {
   size?: number;
   color?: string;
@@ -198,26 +213,78 @@ function InfoIcon({ size = 16, color = 'currentColor', className = '' }: IconPro
   );
 }
 
-// Map icon names to components for use throughout the app
+function BarChartIcon({ size = 18, color = 'currentColor', className = '' }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <rect x="3"  y="12" width="4" height="9" rx="1" fill={color} fillOpacity="0.7"/>
+      <rect x="10" y="7"  width="4" height="14" rx="1" fill={color}/>
+      <rect x="17" y="4"  width="4" height="17" rx="1" fill={color} fillOpacity="0.5"/>
+    </svg>
+  );
+}
+
+function UserIcon({ size = 18, color = 'currentColor', className = '' }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <circle cx="12" cy="8" r="4" stroke={color} strokeWidth="2"/>
+      <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke={color} strokeWidth="2" strokeLinecap="round"/>
+    </svg>
+  );
+}
+
+function TaskIcon({ size = 18, color = 'currentColor', className = '' }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <rect x="3" y="3" width="18" height="18" rx="3" stroke={color} strokeWidth="2" fill={color} fillOpacity="0.07"/>
+      <path d="M8 12l3 3 5-5" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+
+function FireIcon({ size = 18, color = 'currentColor', className = '' }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={color} xmlns="http://www.w3.org/2000/svg" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <path d="M12 2c0 0-5 4-5 9a5 5 0 0 0 10 0c0-2-1-4-2-5 0 2-1 3-3 3-1 0-2-1-2-2 0-2 2-5 2-5z"/>
+      <circle cx="12" cy="16" r="2" fill="rgba(255,255,255,0.4)"/>
+    </svg>
+  );
+}
+
+function MedalIcon({ size = 18, color = 'currentColor', className = '' }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <circle cx="12" cy="14" r="6" stroke={color} strokeWidth="2" fill={color} fillOpacity="0.15"/>
+      <path d="M8 6l-2-4h12l-2 4" stroke={color} strokeWidth="2" strokeLinejoin="round"/>
+      <path d="M9 6h6" stroke={color} strokeWidth="2" strokeLinecap="round"/>
+      <path d="M12 11v3l2 1" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+
 const ICON_COMPONENTS = {
-  coin:    CoinIcon,
-  shield:  ShieldIcon,
-  magnet:  MagnetIcon,
-  speed:   BoltIcon,
-  combo:   FlameIcon,
-  coinCut: SkullIcon,
-  freeze:  SnowflakeIcon,
-  slow:    SwirlIcon,
-  trophy:  TrophyIcon,
-  gift:    GiftIcon,
-  surf:    SurferIcon,
-  wave:    WaveIcon,
-  chain:   ChainIcon,
-  heart:   HeartIcon,
-  shop:    CartIcon,
-  star:    StarIcon,
-  cart:    CartIcon,
-  info:    InfoIcon,
+  coin:      CoinIcon,
+  shield:    ShieldIcon,
+  magnet:    MagnetIcon,
+  speed:     BoltIcon,
+  combo:     FlameIcon,
+  coinCut:   SkullIcon,
+  freeze:    SnowflakeIcon,
+  slow:      SwirlIcon,
+  trophy:    TrophyIcon,
+  gift:      GiftIcon,
+  surf:      SurferIcon,
+  wave:      WaveIcon,
+  chain:     ChainIcon,
+  heart:     HeartIcon,
+  shop:      CartIcon,
+  star:      StarIcon,
+  cart:      CartIcon,
+  info:      InfoIcon,
+  chart:     BarChartIcon,
+  user:      UserIcon,
+  task:      TaskIcon,
+  fire:      FireIcon,
+  medal:     MedalIcon,
 } as const;
 
 type IconName = keyof typeof ICON_COMPONENTS;
@@ -225,6 +292,30 @@ type IconName = keyof typeof ICON_COMPONENTS;
 function Icon({ name, size = 18, color = 'currentColor', className = '' }: { name: IconName; size?: number; color?: string; className?: string }) {
   const Component = ICON_COMPONENTS[name];
   return <Component size={size} color={color} className={className} />;
+}
+
+// ─── Toast notification ───────────────────────────────────────────────────────
+interface ToastData {
+  id: number;
+  message: string;
+  type: 'achievement' | 'mission' | 'streak' | 'info';
+  icon?: IconName;
+  color?: string;
+}
+
+let toastIdCounter = 0;
+
+function ToastStack({ toasts, onDismiss }: { toasts: ToastData[]; onDismiss: (id: number) => void }) {
+  return (
+    <div className="toast-stack">
+      {toasts.map(t => (
+        <div key={t.id} className={`toast toast-${t.type}`} onClick={() => onDismiss(t.id)}>
+          {t.icon && <Icon name={t.icon} size={16} color={t.color ?? 'currentColor'} />}
+          <span>{t.message}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 // ─── Wallet Panel ─────────────────────────────────────────────────────────────
@@ -265,9 +356,10 @@ interface HudProps {
   gameState: GameState;
   scoreAnim: boolean;
   comboAnim: boolean;
+  coinBalance: number;
 }
 
-function Hud({ gameState, scoreAnim, comboAnim }: HudProps) {
+function Hud({ gameState, scoreAnim, comboAnim, coinBalance }: HudProps) {
   return (
     <div className="hud">
       <div className={`hud-card ${scoreAnim ? 'hud-pop' : ''}`}>
@@ -284,6 +376,12 @@ function Hud({ gameState, scoreAnim, comboAnim }: HudProps) {
         <span className="hud-label">COMBO</span>
         <span className="hud-value combo-val">x{gameState.combo}</span>
       </div>
+      <div className="hud-card hud-balance">
+        <span className="hud-label">BALANCE</span>
+        <span className="hud-value coin-val">
+          <Icon name="coin" size={14} color="#f59e0b" /> {coinBalance}
+        </span>
+      </div>
     </div>
   );
 }
@@ -291,9 +389,11 @@ function Hud({ gameState, scoreAnim, comboAnim }: HudProps) {
 // ─── Start Overlay ────────────────────────────────────────────────────────────
 interface StartOverlayProps {
   onStart: () => void;
+  streak: StreakData;
+  profile: PlayerProfile;
 }
 
-function StartOverlay({ onStart }: StartOverlayProps) {
+function StartOverlay({ onStart, streak, profile }: StartOverlayProps) {
   return (
     <div className="overlay start-overlay">
       <div className="start-content">
@@ -308,6 +408,30 @@ function StartOverlay({ onStart }: StartOverlayProps) {
             <Icon name="chain" size={12} color="#22d3ee" /> WEB3 EDITION
           </div>
         </div>
+
+        {streak.currentStreak > 0 && (
+          <div className="start-streak-badge">
+            <Icon name="fire" size={14} color="#f97316" />
+            <span>{streak.currentStreak}-day streak!</span>
+          </div>
+        )}
+
+        {profile.totalGames > 0 && (
+          <div className="start-stats-row">
+            <div className="start-stat">
+              <span className="start-stat-val">{profile.highScore.toLocaleString()}</span>
+              <span className="start-stat-label">Best</span>
+            </div>
+            <div className="start-stat">
+              <span className="start-stat-val">{profile.totalGames}</span>
+              <span className="start-stat-label">Runs</span>
+            </div>
+            <div className="start-stat">
+              <span className="start-stat-val">{profile.coinBalance}</span>
+              <span className="start-stat-label">Coins</span>
+            </div>
+          </div>
+        )}
 
         <p className="start-desc">
           Ride the waves. Dodge obstacles.<br />
@@ -343,9 +467,281 @@ function StartOverlay({ onStart }: StartOverlayProps) {
   );
 }
 
-// ─── Coin Shop Panel ──────────────────────────────────────────────────────────
-function CoinShopPanel() {
+// ─── Achievements Panel ───────────────────────────────────────────────────────
+interface AchievementsPanelProps {
+  achievements: Achievement[];
+}
+
+function AchievementsPanel({ achievements }: AchievementsPanelProps) {
   const [open, setOpen] = useState(false);
+  const unlockedCount = achievements.filter(a => a.unlocked).length;
+
+  return (
+    <div className="section-card achievements-panel">
+      <button
+        className="section-header section-header-btn"
+        onClick={() => setOpen(o => !o)}
+        type="button"
+        aria-expanded={open}
+      >
+        <div className="section-icon"><Icon name="medal" size={16} color="#f59e0b" /></div>
+        <span className="section-title">Achievements</span>
+        <span className="section-badge">
+          <span className="achievement-count">{unlockedCount}/{achievements.length}</span>
+        </span>
+        <span className="collapse-chevron">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="achievements-body">
+          <div className="achievements-grid">
+            {achievements.map(a => (
+              <div
+                key={a.id}
+                className={`achievement-badge ${a.unlocked ? 'achievement-unlocked' : 'achievement-locked'}`}
+                style={a.unlocked ? { '--ach-color': a.color } as React.CSSProperties : undefined}
+                title={a.desc}
+              >
+                <div className="ach-icon-wrap">
+                  <Icon name={a.icon as IconName} size={20} color={a.unlocked ? a.color : 'rgba(255,255,255,0.15)'} />
+                  {a.unlocked && <div className="ach-glow" style={{ background: a.color }} />}
+                </div>
+                <span className="ach-title">{a.title}</span>
+                <span className="ach-desc">{a.desc}</span>
+                {a.unlocked && a.unlockedAt && (
+                  <span className="ach-date">{new Date(a.unlockedAt).toLocaleDateString()}</span>
+                )}
+                {!a.unlocked && <span className="ach-locked-label">Locked</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Player Profile Card ──────────────────────────────────────────────────────
+interface ProfileCardProps {
+  profile: PlayerProfile;
+  streak: StreakData;
+}
+
+function ProfileCard({ profile, streak }: ProfileCardProps) {
+  const [open, setOpen] = useState(false);
+  const avgScore = profile.totalGames > 0 ? Math.round(profile.totalScoreSum / profile.totalGames) : 0;
+
+  return (
+    <div className="section-card profile-card">
+      <button
+        className="section-header section-header-btn"
+        onClick={() => setOpen(o => !o)}
+        type="button"
+        aria-expanded={open}
+      >
+        <div className="section-icon"><Icon name="user" size={16} color="#22d3ee" /></div>
+        <span className="section-title">Player Profile</span>
+        <span className="section-badge">
+          {streak.currentStreak > 0 && (
+            <span className="streak-mini">
+              <Icon name="fire" size={12} color="#f97316" /> {streak.currentStreak}d
+            </span>
+          )}
+        </span>
+        <span className="collapse-chevron">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="profile-body">
+          {streak.currentStreak > 0 && (
+            <div className="streak-banner">
+              <Icon name="fire" size={18} color="#f97316" />
+              <div className="streak-info">
+                <span className="streak-num">{streak.currentStreak}-Day Streak</span>
+                <span className="streak-sub">
+                  {streak.currentStreak >= 7 ? '+250 bonus today' :
+                   streak.currentStreak >= 3 ? '+100 bonus today' : '+50 bonus today'}
+                </span>
+              </div>
+              <div className="streak-milestones">
+                <span className={`streak-mile ${streak.currentStreak >= 1 ? 'reached' : ''}`}>D1</span>
+                <span className={`streak-mile ${streak.currentStreak >= 3 ? 'reached' : ''}`}>D3</span>
+                <span className={`streak-mile ${streak.currentStreak >= 7 ? 'reached' : ''}`}>D7</span>
+              </div>
+            </div>
+          )}
+          <div className="profile-stats-grid">
+            <div className="profile-stat">
+              <Icon name="surf" size={16} color="#22d3ee" />
+              <span className="ps-val">{profile.totalGames}</span>
+              <span className="ps-label">Games Played</span>
+            </div>
+            <div className="profile-stat">
+              <Icon name="trophy" size={16} color="#f59e0b" />
+              <span className="ps-val">{profile.highScore.toLocaleString()}</span>
+              <span className="ps-label">High Score</span>
+            </div>
+            <div className="profile-stat">
+              <Icon name="coin" size={16} color="#f59e0b" />
+              <span className="ps-val">{profile.totalCoinsEarned.toLocaleString()}</span>
+              <span className="ps-label">Total Coins</span>
+            </div>
+            <div className="profile-stat">
+              <Icon name="gift" size={16} color="#10b981" />
+              <span className="ps-val">{profile.dailyRewardsClaimed}</span>
+              <span className="ps-label">Daily Claims</span>
+            </div>
+            <div className="profile-stat">
+              <Icon name="coin" size={16} color="#a855f7" />
+              <span className="ps-val">{profile.coinBalance}</span>
+              <span className="ps-label">Balance</span>
+            </div>
+            <div className="profile-stat">
+              <Icon name="chart" size={16} color="#38bdf8" />
+              <span className="ps-val">{avgScore.toLocaleString()}</span>
+              <span className="ps-label">Avg Score</span>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Daily Missions Panel ─────────────────────────────────────────────────────
+interface MissionsPanelProps {
+  missions: Mission[];
+  onClaim: (missionId: string) => void;
+}
+
+function MissionsPanel({ missions, onClaim }: MissionsPanelProps) {
+  const [open, setOpen] = useState(false);
+  const completedCount = missions.filter(m => m.completed).length;
+  const claimableCount = missions.filter(m => m.completed && !m.claimed).length;
+
+  return (
+    <div className={`section-card missions-panel ${claimableCount > 0 ? 'missions-has-claimable' : ''}`}>
+      <button
+        className="section-header section-header-btn"
+        onClick={() => setOpen(o => !o)}
+        type="button"
+        aria-expanded={open}
+      >
+        <div className="section-icon"><Icon name="task" size={16} color="#10b981" /></div>
+        <span className="section-title">Daily Missions</span>
+        <span className="section-badge">
+          {claimableCount > 0 && (
+            <span className="mission-claimable-dot">{claimableCount} ready</span>
+          )}
+          {claimableCount === 0 && <span>{completedCount}/{missions.length}</span>}
+        </span>
+        <span className="collapse-chevron">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="missions-body">
+          {missions.map(m => {
+            const pct = Math.min(100, Math.round((m.progress / m.target) * 100));
+            return (
+              <div key={m.id} className={`mission-row ${m.claimed ? 'mission-claimed' : m.completed ? 'mission-done' : ''}`}>
+                <div className="mission-icon">
+                  <Icon name={m.icon as IconName} size={18} color={m.completed ? '#10b981' : '#94a3b8'} />
+                </div>
+                <div className="mission-info">
+                  <span className="mission-title">{m.title}</span>
+                  <span className="mission-desc">{m.desc}</span>
+                  <div className="mission-progress-wrap">
+                    <div className="mission-progress-bar">
+                      <div className="mission-progress-fill" style={{ width: `${pct}%` }} />
+                    </div>
+                    <span className="mission-progress-label">{m.progress}/{m.target}</span>
+                  </div>
+                </div>
+                <div className="mission-reward">
+                  {m.claimed ? (
+                    <span className="mission-claimed-label">Claimed</span>
+                  ) : m.completed ? (
+                    <button className="mission-claim-btn" onClick={() => onClaim(m.id)} type="button">
+                      +{m.reward} <Icon name="coin" size={11} color="#020916" />
+                    </button>
+                  ) : (
+                    <span className="mission-reward-label">
+                      <Icon name="coin" size={12} color="#f59e0b" /> {m.reward}
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Stats Panel ──────────────────────────────────────────────────────────────
+interface StatsPanelProps {
+  profile: PlayerProfile;
+}
+
+function StatsPanel({ profile }: StatsPanelProps) {
+  const [open, setOpen] = useState(false);
+  const avg = profile.totalGames > 0 ? Math.round(profile.totalScoreSum / profile.totalGames) : 0;
+
+  return (
+    <div className="section-card stats-panel">
+      <button
+        className="section-header section-header-btn"
+        onClick={() => setOpen(o => !o)}
+        type="button"
+        aria-expanded={open}
+      >
+        <div className="section-icon"><Icon name="chart" size={16} color="#38bdf8" /></div>
+        <span className="section-title">Statistics</span>
+        <span className="section-badge">{profile.totalGames} runs total</span>
+        <span className="collapse-chevron">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="stats-body">
+          <div className="stats-grid">
+            <div className="stat-cell">
+              <span className="stat-num" style={{ color: '#22d3ee' }}>{avg.toLocaleString()}</span>
+              <span className="stat-lbl">Avg Score</span>
+            </div>
+            <div className="stat-cell">
+              <span className="stat-num" style={{ color: '#f59e0b' }}>{profile.highScore.toLocaleString()}</span>
+              <span className="stat-lbl">Best Score</span>
+            </div>
+            <div className="stat-cell">
+              <span className="stat-num" style={{ color: '#f59e0b' }}>{profile.totalCoinsEarned.toLocaleString()}</span>
+              <span className="stat-lbl">Total Coins</span>
+            </div>
+            <div className="stat-cell">
+              <span className="stat-num" style={{ color: '#38bdf8' }}>{profile.totalGames}</span>
+              <span className="stat-lbl">Runs</span>
+            </div>
+            <div className="stat-cell">
+              <span className="stat-num" style={{ color: '#10b981' }}>{profile.totalObstaclesAvoided.toLocaleString()}</span>
+              <span className="stat-lbl">Obstacles Avoided</span>
+            </div>
+            <div className="stat-cell">
+              <span className="stat-num" style={{ color: '#a855f7' }}>{profile.coinBalance}</span>
+              <span className="stat-lbl">Coin Balance</span>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Coin Shop Panel ──────────────────────────────────────────────────────────
+interface CoinShopPanelProps {
+  coinBalance: number;
+  shopPurchases: ShopPurchase;
+  onBuyShopItem: (item: 'shield' | 'magnet' | 'multiplier') => void;
+}
+
+function CoinShopPanel({ coinBalance, shopPurchases, onBuyShopItem }: CoinShopPanelProps) {
+  const [open, setOpen] = useState(false);
+
   return (
     <div className="coin-shop-panel section-card">
       <button
@@ -355,84 +751,114 @@ function CoinShopPanel() {
         aria-expanded={open}
       >
         <div className="section-icon"><Icon name="shop" size={16} color="#22d3ee" /></div>
-        <span className="section-title">Coin Shop</span>
-        <span className="section-badge"><Icon name="coin" size={13} color="#f59e0b" /> Use your coins</span>
+        <span className="section-title">Power-Up Shop</span>
+        <span className="section-badge">
+          <Icon name="coin" size={13} color="#f59e0b" /> {coinBalance}
+        </span>
         <span className="collapse-chevron">{open ? '▲' : '▼'}</span>
       </button>
       {open && (
         <div className="coin-shop-body">
-          {/* ISSUE 3 FIX — Coin system clarity panel */}
           <div className="coin-explainer">
             <div className="coin-explainer-title">
               <Icon name="coin" size={15} color="#f59e0b" />
               How Coins Work
             </div>
             <p className="coin-explainer-desc">
-              Coins are collected during your run. They are separate from your Score and can be spent on items below.
-              Unused coins remain in your balance — they are never lost between screens.
+              Coins are collected during your run. Spend them on power-ups below — they activate at the start of your next run. Your balance: <strong>{coinBalance} coins</strong>.
             </p>
-            <div className="coin-uses-grid">
-              <div className="coin-use-row">
-                <Icon name="heart" size={14} color="#f9a8d4" />
-                <span>Extra Life — 100 coins</span>
-                <span className="coin-use-status coin-use-active">Available now</span>
-              </div>
-              <div className="coin-use-row">
-                <Icon name="shield" size={14} color="#22d3ee" />
-                <span>Power-Up Boosts</span>
-                <span className="coin-use-status coin-use-soon">Coming soon</span>
-              </div>
-              <div className="coin-use-row">
-                <Icon name="star" size={14} color="#f59e0b" />
-                <span>Unlockables</span>
-                <span className="coin-use-status coin-use-soon">Coming soon</span>
-              </div>
-              <div className="coin-use-row">
-                <Icon name="cart" size={14} color="#a78bfa" />
-                <span>Reward Store</span>
-                <span className="coin-use-status coin-use-soon">Coming soon</span>
-              </div>
-            </div>
           </div>
 
-          <p className="coin-shop-intro">
-            Items available now — more items will be added as the game expands.
-          </p>
           <div className="coin-shop-items">
-            {/* ISSUE 4 FIX — Life section with clear icon + tooltip */}
+            {/* Extra Life — always available */}
             <div className="shop-item shop-item-life">
               <div className="shop-item-icon"><Icon name="heart" size={22} color="#f9a8d4" /></div>
               <div className="shop-item-info">
                 <span className="shop-item-name">
                   Extra Life
-                  <span className="shop-item-available-tag">Available</span>
+                  <span className="shop-item-available-tag">Available on Game Over</span>
                 </span>
-                <span className="shop-item-desc">Use 100 coins to continue your run after a wipeout.</span>
+                <span className="shop-item-desc">Continue your run after a wipeout.</span>
                 <span className="shop-item-tooltip">
                   <Icon name="info" size={11} color="#94a3b8" />
-                  Buy this on the Game Over screen to resume exactly where you crashed.
+                  Buy on the Game Over screen to resume where you crashed.
                 </span>
               </div>
               <div className="shop-item-cost">
                 <Icon name="coin" size={14} color="#f59e0b" /> {EXTRA_LIFE_COST}
               </div>
             </div>
-            <div className="shop-item shop-item-locked">
-              <div className="shop-item-icon"><Icon name="shield" size={22} color="#22d3ee" /></div>
+
+            {/* Shield */}
+            <div className={`shop-item shop-item-buyable ${coinBalance < SHIELD_COST ? 'shop-item-insufficient' : ''}`}>
+              <div className="shop-item-icon"><Icon name="shield" size={22} color="#06b6d4" /></div>
               <div className="shop-item-info">
-                <span className="shop-item-name">Shield Power-up</span>
-                <span className="shop-item-desc">Start your next run with a shield active</span>
+                <span className="shop-item-name">
+                  Shield
+                  {shopPurchases.shield > 0 && <span className="shop-item-owned-tag">×{shopPurchases.shield} owned</span>}
+                </span>
+                <span className="shop-item-desc">Start your next run with a shield active.</span>
               </div>
-              <div className="shop-item-cost shop-item-cost--locked">Coming soon</div>
+              <div className="shop-item-actions">
+                <span className="shop-item-cost"><Icon name="coin" size={13} color="#f59e0b" /> {SHIELD_COST}</span>
+                <button
+                  className={`shop-buy-btn ${coinBalance >= SHIELD_COST ? 'shop-buy-enabled' : 'shop-buy-disabled'}`}
+                  onClick={() => coinBalance >= SHIELD_COST && onBuyShopItem('shield')}
+                  type="button"
+                  disabled={coinBalance < SHIELD_COST}
+                >
+                  {coinBalance >= SHIELD_COST ? 'Buy' : `Need ${SHIELD_COST - coinBalance} more`}
+                </button>
+              </div>
             </div>
-            <div className="shop-item shop-item-locked">
+
+            {/* Magnet Boost */}
+            <div className={`shop-item shop-item-buyable ${coinBalance < MAGNET_COST ? 'shop-item-insufficient' : ''}`}>
               <div className="shop-item-icon"><Icon name="magnet" size={22} color="#f97316" /></div>
               <div className="shop-item-info">
-                <span className="shop-item-name">Magnet Boost</span>
-                <span className="shop-item-desc">Start with 6s magnet effect active</span>
+                <span className="shop-item-name">
+                  Magnet Boost
+                  {shopPurchases.magnet > 0 && <span className="shop-item-owned-tag">×{shopPurchases.magnet} owned</span>}
+                </span>
+                <span className="shop-item-desc">Start with 6s magnet effect active.</span>
               </div>
-              <div className="shop-item-cost shop-item-cost--locked">Coming soon</div>
+              <div className="shop-item-actions">
+                <span className="shop-item-cost"><Icon name="coin" size={13} color="#f59e0b" /> {MAGNET_COST}</span>
+                <button
+                  className={`shop-buy-btn ${coinBalance >= MAGNET_COST ? 'shop-buy-enabled' : 'shop-buy-disabled'}`}
+                  onClick={() => coinBalance >= MAGNET_COST && onBuyShopItem('magnet')}
+                  type="button"
+                  disabled={coinBalance < MAGNET_COST}
+                >
+                  {coinBalance >= MAGNET_COST ? 'Buy' : `Need ${MAGNET_COST - coinBalance} more`}
+                </button>
+              </div>
             </div>
+
+            {/* Score Multiplier */}
+            <div className={`shop-item shop-item-buyable ${coinBalance < MULTIPLIER_COST ? 'shop-item-insufficient' : ''}`}>
+              <div className="shop-item-icon"><Icon name="star" size={22} color="#f59e0b" /></div>
+              <div className="shop-item-info">
+                <span className="shop-item-name">
+                  Score Multiplier
+                  {shopPurchases.multiplier > 0 && <span className="shop-item-owned-tag">×{shopPurchases.multiplier} owned</span>}
+                </span>
+                <span className="shop-item-desc">Start with 2× score combo active.</span>
+              </div>
+              <div className="shop-item-actions">
+                <span className="shop-item-cost"><Icon name="coin" size={13} color="#f59e0b" /> {MULTIPLIER_COST}</span>
+                <button
+                  className={`shop-buy-btn ${coinBalance >= MULTIPLIER_COST ? 'shop-buy-enabled' : 'shop-buy-disabled'}`}
+                  onClick={() => coinBalance >= MULTIPLIER_COST && onBuyShopItem('multiplier')}
+                  type="button"
+                  disabled={coinBalance < MULTIPLIER_COST}
+                >
+                  {coinBalance >= MULTIPLIER_COST ? 'Buy' : `Need ${MULTIPLIER_COST - coinBalance} more`}
+                </button>
+              </div>
+            </div>
+
+            {/* On-chain item */}
             <div className="shop-item shop-item-locked">
               <div className="shop-item-icon"><Icon name="chain" size={22} color="#a855f7" /></div>
               <div className="shop-item-info">
@@ -452,6 +878,7 @@ function CoinShopPanel() {
 interface GameOverOverlayProps {
   finalScore: number;
   finalCoins: number;
+  coinBalance: number;
   isNewRecord: boolean;
   timeUntilNextClaim: string;
   canClaimReward: boolean;
@@ -472,25 +899,12 @@ interface GameOverOverlayProps {
 }
 
 function GameOverOverlay({
-  finalScore,
-  finalCoins,
-  isNewRecord,
-  timeUntilNextClaim,
-  canClaimReward,
-  claimLoading,
-  claimMessage,
-  claimSuccess,
-  txLoading,
-  txPhase,
-  txMessage,
-  wallet,
-  lives,
-  onRestart,
-  onShare,
-  onSaveOnChain,
-  onConnectWallet,
-  onClaimReward,
-  onBuyLife,
+  finalScore, finalCoins, coinBalance, isNewRecord,
+  timeUntilNextClaim, canClaimReward,
+  claimLoading, claimMessage, claimSuccess,
+  txLoading, txPhase, txMessage,
+  wallet, lives,
+  onRestart, onShare, onSaveOnChain, onConnectWallet, onClaimReward, onBuyLife,
 }: GameOverOverlayProps) {
   const statusClass =
     txPhase === 'confirmed' ? 'tx-success' :
@@ -498,8 +912,7 @@ function GameOverOverlay({
     (txPhase === 'awaiting-approval' || txPhase === 'submitted') ? 'tx-pending' :
     '';
   const statusLabel = TX_PHASE_LABEL[txPhase];
-
-  const canAffordLife = finalCoins >= EXTRA_LIFE_COST;
+  const canAffordLife = coinBalance >= EXTRA_LIFE_COST;
 
   return (
     <div className="overlay gameover-overlay">
@@ -515,7 +928,6 @@ function GameOverOverlay({
           <p className="gameover-sub">Your run has ended. Continue or claim your rewards.</p>
         </div>
 
-        {/* ISSUE 6 FIX — Score vs Coin clarity */}
         <div className="score-card">
           <div className="score-card-row">
             <span className="sc-label">
@@ -530,61 +942,44 @@ function GameOverOverlay({
           <div className="score-card-row">
             <span className="sc-label">
               <span className="sc-label-with-tip">
-                Coins Collected
-                <span className="sc-label-tip">Spendable below</span>
+                Coins This Run
+                <span className="sc-label-tip">Added to balance</span>
               </span>
             </span>
             <span className="sc-value coin-sc-value">
               <Icon name="coin" size={18} color="#f59e0b" /> {finalCoins}
             </span>
           </div>
-          {/* Score/Coin explanation */}
-          <div className="score-coin-explainer">
-            <div className="score-coin-explainer-row">
-              <span className="sce-label sce-score">Score Points</span>
-              <span className="sce-desc">Used only for leaderboard ranking. Cannot be spent.</span>
-            </div>
-            <div className="score-coin-explainer-row">
-              <span className="sce-label sce-coins">
-                <Icon name="coin" size={12} color="#f59e0b" /> Coins
+          <div className="score-card-divider" />
+          <div className="score-card-row">
+            <span className="sc-label">
+              <span className="sc-label-with-tip">
+                Coin Balance
+                <span className="sc-label-tip">Spendable below</span>
               </span>
-              <span className="sce-desc">
-                Used for purchases. Current balance: <strong>{finalCoins}</strong>.
-                {finalCoins > 0 && finalCoins < EXTRA_LIFE_COST && (
-                  <span> Need {EXTRA_LIFE_COST - finalCoins} more for an Extra Life.</span>
-                )}
-                {finalCoins >= EXTRA_LIFE_COST && (
-                  <span> You can buy an Extra Life below!</span>
-                )}
-              </span>
-            </div>
+            </span>
+            <span className="sc-value coin-sc-value">
+              <Icon name="coin" size={18} color="#a855f7" /> {coinBalance}
+            </span>
           </div>
         </div>
 
-        {/* ISSUE 4 FIX — Extra Life / Continue section */}
+        {/* Extra Life */}
         <div className="extra-life-card">
           <div className="extra-life-header">
             <Icon name="heart" size={20} color="#f9a8d4" />
             <div className="extra-life-header-text">
               <span className="extra-life-title">Extra Life</span>
-              <span className="extra-life-subtitle">Continue your run from where you crashed</span>
+              <span className="extra-life-subtitle">Continue from where you crashed</span>
             </div>
             <span className="extra-life-lives">
-              {lives > 0 ? `${lives} free ${lives === 1 ? 'life' : 'lives'}` : 'No free lives left'}
+              {lives > 0 ? `${lives} free ${lives === 1 ? 'life' : 'lives'}` : 'No free lives'}
             </span>
-          </div>
-          <div className="extra-life-help">
-            <Icon name="info" size={13} color="#94a3b8" />
-            Use 100 coins to continue your run after a wipeout. Your score and progress are preserved.
           </div>
           <div className="extra-life-actions">
             {lives > 0 && (
-              <button
-                className="action-btn primary-action extra-life-btn"
-                onClick={onBuyLife}
-                type="button"
-              >
-                <Icon name="heart" size={16} color="#020916" /> Use 1 Free Life &amp; Continue
+              <button className="action-btn primary-action extra-life-btn" onClick={onBuyLife} type="button">
+                <Icon name="heart" size={16} color="#020916" /> Use 1 Free Life
                 <span className="extra-life-badge">{lives} left</span>
               </button>
             )}
@@ -593,33 +988,27 @@ function GameOverOverlay({
               onClick={canAffordLife ? onBuyLife : undefined}
               type="button"
               disabled={!canAffordLife}
-              title={canAffordLife ? 'Spend 100 coins to continue your run' : `Need ${EXTRA_LIFE_COST} coins to buy a life (you have ${finalCoins})`}
             >
-              <Icon name="coin" size={16} color={canAffordLife ? '#f9a8d4' : undefined} /> Buy Extra Life — 100 Coins
+              <Icon name="coin" size={16} color={canAffordLife ? '#f9a8d4' : undefined} />
+              Buy Extra Life — {EXTRA_LIFE_COST} Coins
               {!canAffordLife && (
-                <span className="extra-life-short">
-                  Need {EXTRA_LIFE_COST - finalCoins} more
-                </span>
+                <span className="extra-life-short">Need {EXTRA_LIFE_COST - coinBalance} more</span>
               )}
             </button>
           </div>
         </div>
 
-        {/* ISSUE 2 FIX — Daily Reward with no broken Unicode */}
+        {/* Daily Reward */}
         <div className="daily-reward-card">
           <div className="dr-header">
             <span className="dr-header-left">
               <Icon name="gift" size={16} color="#f59e0b" /> Daily Reward
             </span>
             <span className="dr-timer">
-              {canClaimReward ? 'Ready now!' : `Next claim in ${timeUntilNextClaim}`}
+              {canClaimReward ? 'Ready now!' : `Next: ${timeUntilNextClaim}`}
             </span>
           </div>
           <p className="dr-desc">+500 coins · Claimable once every 24 hours</p>
-          <p className="dr-note">
-            Local in-game reward — no wallet or transaction required.
-          </p>
-
           <button
             className="action-btn primary-action"
             style={{ marginTop: '10px' }}
@@ -634,7 +1023,6 @@ function GameOverOverlay({
                 : <>Next claim in {timeUntilNextClaim}</>
             }
           </button>
-
           {claimMessage && (
             <div className={`tx-status ${claimSuccess ? 'tx-success' : 'tx-error'}`} style={{ marginTop: '8px' }}>
               {claimMessage}
@@ -647,7 +1035,6 @@ function GameOverOverlay({
           <button className="action-btn secondary-action" onClick={onRestart} type="button">
             ↺ Surf Again
           </button>
-
           <button className="action-btn tertiary-action" onClick={onShare} type="button">
             Share on Telegram
           </button>
@@ -657,35 +1044,24 @@ function GameOverOverlay({
         <div className="gameover-secondary-actions">
           {REWARD_CONTRACT_DEPLOYED ? (
             wallet.signer ? (
-              <button
-                className="link-action"
-                onClick={onSaveOnChain}
-                type="button"
-                disabled={txLoading}
-              >
+              <button className="link-action" onClick={onSaveOnChain} type="button" disabled={txLoading}>
                 {txLoading ? <span className="spinner" /> : <><Icon name="chain" size={14} color="currentColor" /> Save Score On-Chain</>}
               </button>
             ) : (
-              <button
-                className="link-action"
-                onClick={onConnectWallet}
-                type="button"
-              >
+              <button className="link-action" onClick={onConnectWallet} type="button">
                 ◈ Connect Wallet to Save Score
               </button>
             )
           ) : (
-            <p className="onchain-unavailable-note">
-              On-chain saving is currently unavailable — no deployed contract is configured.
-            </p>
+            <p className="onchain-unavailable-note">On-chain saving is currently unavailable — no deployed contract is configured.</p>
           )}
         </div>
 
         {REWARD_CONTRACT_DEPLOYED && txPhase !== 'idle' && (txMessage || statusLabel) && (
           <div className={`tx-status ${statusClass}`}>
-            {txPhase === 'awaiting-approval' || txPhase === 'submitted'
-              ? <span className="spinner" style={{ width: 12, height: 12, borderWidth: 2, marginRight: 6, verticalAlign: 'middle' }} />
-              : null}
+            {(txPhase === 'awaiting-approval' || txPhase === 'submitted') &&
+              <span className="spinner" style={{ width: 12, height: 12, borderWidth: 2, marginRight: 6, verticalAlign: 'middle' }} />
+            }
             {txMessage || statusLabel}
           </div>
         )}
@@ -694,8 +1070,7 @@ function GameOverOverlay({
   );
 }
 
-
-// ─── Leaderboard (collapsible) ────────────────────────────────────────────────
+// ─── Leaderboard ──────────────────────────────────────────────────────────────
 interface LeaderboardProps {
   entries: LeaderboardEntry[];
   walletConnected: boolean;
@@ -704,12 +1079,11 @@ interface LeaderboardProps {
 function Leaderboard({ entries, walletConnected }: LeaderboardProps) {
   const [open, setOpen] = useState(false);
 
-  // ISSUE 5 FIX — rank labels use text instead of medal emoji
-  const rankLabel = (i: number) => {
-    if (i === 0) return '1st';
-    if (i === 1) return '2nd';
-    if (i === 2) return '3rd';
-    return `#${i + 1}`;
+  const rankMeta = (i: number) => {
+    if (i === 0) return { label: '1st', cls: 'lb-rank-gold',   icon: '🥇' };
+    if (i === 1) return { label: '2nd', cls: 'lb-rank-silver', icon: '🥈' };
+    if (i === 2) return { label: '3rd', cls: 'lb-rank-bronze', icon: '🥉' };
+    return { label: `#${i + 1}`, cls: 'lb-rank-default', icon: null };
   };
   const rowClass = (i: number) => {
     if (i === 0) return 'lb-row lb-first';
@@ -726,9 +1100,7 @@ function Leaderboard({ entries, walletConnected }: LeaderboardProps) {
         type="button"
         aria-expanded={open}
       >
-        <div className="section-icon">
-          <Icon name="trophy" size={16} color="#22d3ee" />
-        </div>
+        <div className="section-icon"><Icon name="trophy" size={16} color="#22d3ee" /></div>
         <span className="section-title">Leaderboard</span>
         <span className="section-badge">{entries.length} entries</span>
         <span className="collapse-chevron">{open ? '▲' : '▼'}</span>
@@ -736,14 +1108,12 @@ function Leaderboard({ entries, walletConnected }: LeaderboardProps) {
 
       {open && (
         <>
-          {/* ISSUE 5 FIX — Leaderboard description */}
           <div className="lb-description">
             <Icon name="info" size={13} color="#94a3b8" />
             {walletConnected
               ? 'Leaderboard displays connected player scores.'
-              : 'Leaderboard displays the highest local scores recorded on this device.'}
+              : 'Leaderboard shows the highest scores on this device.'}
           </div>
-          {/* ISSUE 6 FIX — Score clarification in leaderboard */}
           <div className="lb-score-note">
             <Icon name="star" size={12} color="#22d3ee" />
             Score is for ranking only.
@@ -754,23 +1124,28 @@ function Leaderboard({ entries, walletConnected }: LeaderboardProps) {
             <div className="lb-empty">Play a run to appear on the leaderboard!</div>
           ) : (
             <div className="lb-list">
-              {entries.map((entry, idx) => (
-                <div key={`${entry.date}-${idx}`} className={rowClass(idx)}>
-                  <div className={`lb-rank lb-rank-badge lb-rank-${idx < 3 ? ['gold','silver','bronze'][idx] : 'default'}`}>
-                    {rankLabel(idx)}
+              {entries.map((entry, idx) => {
+                const { label, cls, icon } = rankMeta(idx);
+                return (
+                  <div key={`${entry.date}-${idx}`} className={rowClass(idx)}>
+                    <div className={`lb-rank lb-rank-badge ${cls}`}>
+                      {idx < 3 ? (
+                        <span className="lb-medal-emoji">{icon}</span>
+                      ) : label}
+                    </div>
+                    <div className="lb-info">
+                      <span className="lb-name">{entry.name}</span>
+                      <span className="lb-date">{new Date(entry.date).toLocaleDateString()}</span>
+                    </div>
+                    <div className="lb-scores">
+                      <span className="lb-score">{entry.score.toLocaleString()} pts</span>
+                      <span className="lb-coins">
+                        <Icon name="coin" size={11} color="#f59e0b" /> {entry.coins}
+                      </span>
+                    </div>
                   </div>
-                  <div className="lb-info">
-                    <span className="lb-name">{entry.name}</span>
-                    <span className="lb-date">{new Date(entry.date).toLocaleDateString()}</span>
-                  </div>
-                  <div className="lb-scores">
-                    <span className="lb-score">{entry.score.toLocaleString()} pts</span>
-                    <span className="lb-coins">
-                      <Icon name="coin" size={11} color="#f59e0b" /> {entry.coins}
-                    </span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </>
@@ -780,9 +1155,7 @@ function Leaderboard({ entries, walletConnected }: LeaderboardProps) {
 }
 
 // ─── Rules Modal ──────────────────────────────────────────────────────────────
-interface RulesModalProps {
-  onClose: () => void;
-}
+interface RulesModalProps { onClose: () => void; }
 
 function RulesModal({ onClose }: RulesModalProps) {
   const powerups = [
@@ -801,9 +1174,7 @@ function RulesModal({ onClose }: RulesModalProps) {
       <div className="rules-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div className="modal-header-left">
-            <span className="modal-header-icon">
-              <Icon name="wave" size={22} color="#22d3ee" />
-            </span>
+            <span className="modal-header-icon"><Icon name="wave" size={22} color="#22d3ee" /></span>
             <div>
               <h2>How to Play</h2>
               <p>Surf Rush · Web3 Edition</p>
@@ -813,49 +1184,27 @@ function RulesModal({ onClose }: RulesModalProps) {
         </div>
 
         <div className="modal-content">
-          {/* Objective */}
           <div className="modal-section">
-            <div className="modal-section-title">
-              <span className="icon">Objective</span>
-            </div>
+            <div className="modal-section-title"><span className="icon">Objective</span></div>
             <div className="modal-items">
-              <div className="modal-item">
-                <span className="modal-item-icon"><Icon name="surf" size={16} color="#22d3ee" /></span>
-                <span>Survive as long as possible on the endless ocean while dodging obstacles.</span>
-              </div>
-              <div className="modal-item">
-                <span className="modal-item-icon"><Icon name="coin" size={16} color="#f59e0b" /></span>
-                <span>Collect coin boxes and power-up boxes to increase your score and combo.</span>
-              </div>
-              <div className="modal-item">
-                <span className="modal-item-icon"><Icon name="chain" size={16} color="#a855f7" /></span>
-                <span>Save your high score on-chain and claim daily in-game rewards.</span>
-              </div>
+              <div className="modal-item"><span className="modal-item-icon"><Icon name="surf" size={16} color="#22d3ee" /></span><span>Survive as long as possible on the endless ocean while dodging obstacles.</span></div>
+              <div className="modal-item"><span className="modal-item-icon"><Icon name="coin" size={16} color="#f59e0b" /></span><span>Collect coin boxes and power-up boxes to increase your score and combo.</span></div>
+              <div className="modal-item"><span className="modal-item-icon"><Icon name="chain" size={16} color="#a855f7" /></span><span>Save your high score on-chain and claim daily in-game rewards.</span></div>
             </div>
           </div>
 
-          {/* Controls */}
           <div className="modal-section">
-            <div className="modal-section-title">
-              <span className="icon">Controls</span>
-            </div>
+            <div className="modal-section-title"><span className="icon">Controls</span></div>
             <div className="modal-controls-grid">
-              <span className="ctrl-key">◀ / A</span>
-              <span className="ctrl-desc">Move left</span>
-              <span className="ctrl-key">▶ / D</span>
-              <span className="ctrl-desc">Move right</span>
-              <span className="ctrl-key">Space / P</span>
-              <span className="ctrl-desc">Pause game</span>
-              <span className="ctrl-key">Swipe</span>
-              <span className="ctrl-desc">Swipe left or right on mobile</span>
+              <span className="ctrl-key">◀ / A</span><span className="ctrl-desc">Move left</span>
+              <span className="ctrl-key">▶ / D</span><span className="ctrl-desc">Move right</span>
+              <span className="ctrl-key">Space / P</span><span className="ctrl-desc">Pause game</span>
+              <span className="ctrl-key">Swipe</span><span className="ctrl-desc">Swipe left or right on mobile</span>
             </div>
           </div>
 
-          {/* Power-ups */}
           <div className="modal-section">
-            <div className="modal-section-title">
-              <span className="icon">Power-Ups &amp; Boxes</span>
-            </div>
+            <div className="modal-section-title"><span className="icon">Power-Ups &amp; Boxes</span></div>
             <div className="modal-powerup-grid">
               {powerups.map(p => (
                 <div className="modal-powerup-item" key={p.name}>
@@ -869,11 +1218,8 @@ function RulesModal({ onClose }: RulesModalProps) {
             </div>
           </div>
 
-          {/* Obstacles */}
           <div className="modal-section">
-            <div className="modal-section-title">
-              <span className="icon">Obstacles</span>
-            </div>
+            <div className="modal-section-title"><span className="icon">Obstacles</span></div>
             <div className="modal-items">
               <div className="modal-item"><span className="modal-item-icon modal-item-icon--text">Rock</span><span>Rock — solid object blocking the lane</span></div>
               <div className="modal-item"><span className="modal-item-icon modal-item-icon--text">Shark</span><span>Shark — lurks beneath the surface</span></div>
@@ -882,11 +1228,8 @@ function RulesModal({ onClose }: RulesModalProps) {
             </div>
           </div>
 
-          {/* ISSUE 6 FIX — Coin Economy with Score vs Coin clarity */}
           <div className="modal-section">
-            <div className="modal-section-title">
-              <span className="icon"><Icon name="coin" size={14} color="#f59e0b" /></span> Scores vs Coins
-            </div>
+            <div className="modal-section-title"><span className="icon"><Icon name="coin" size={14} color="#f59e0b" /></span> Scores vs Coins</div>
             <div className="score-vs-coins-explainer">
               <div className="svc-block svc-score">
                 <div className="svc-title">Score Points</div>
@@ -900,29 +1243,16 @@ function RulesModal({ onClose }: RulesModalProps) {
                 <div className="svc-title"><Icon name="coin" size={13} color="#f59e0b" /> Coins</div>
                 <ul className="svc-list">
                   <li>Collected from coin boxes during your run</li>
-                  <li>Spent on Extra Lives (100 coins)</li>
-                  <li>Future: Power-ups, Unlockables, Reward Store</li>
+                  <li>Spent on Extra Lives, Shield, Magnet, Multiplier</li>
+                  <li>Bonus from Daily Rewards, Missions, Streak</li>
                   <li>Unused coins stay in your balance</li>
                 </ul>
               </div>
             </div>
-            <div className="modal-items" style={{ marginTop: 8 }}>
-              <div className="modal-item">
-                <span className="modal-item-icon"><Icon name="gift" size={16} color="#f59e0b" /></span>
-                <span>Claim +500 free coins every 24 hours via the Daily Reward — no wallet needed.</span>
-              </div>
-              <div className="modal-item">
-                <span className="modal-item-icon"><Icon name="chain" size={16} color="#a855f7" /></span>
-                <span>On-chain redemption of coins will be enabled once the reward contract is deployed.</span>
-              </div>
-            </div>
           </div>
 
-          {/* Blockchain */}
           <div className="modal-section">
-            <div className="modal-section-title">
-              <span className="icon"><Icon name="chain" size={14} color="#22d3ee" /></span> Blockchain Features
-            </div>
+            <div className="modal-section-title"><span className="icon"><Icon name="chain" size={14} color="#22d3ee" /></span> Blockchain Features</div>
             <div className="modal-items">
               <div className="modal-item"><span className="modal-item-icon">◈</span><span>Connect MetaMask to unlock on-chain score saving</span></div>
               <div className="modal-item"><span className="modal-item-icon"><Icon name="trophy" size={16} color="#f59e0b" /></span><span>Save your high score permanently on-chain after each run</span></div>
@@ -955,8 +1285,8 @@ export default function App() {
 
   const [lives, setLives] = useState(0);
 
-  const [wallet, setWalletState]       = useState<WalletState>({ address: null, provider: null, signer: null, chainId: null, networkName: null });
-  const [walletError, setWalletError]  = useState<string | null>(null);
+  const [wallet, setWalletState]      = useState<WalletState>({ address: null, provider: null, signer: null, chainId: null, networkName: null });
+  const [walletError, setWalletError] = useState<string | null>(null);
 
   const [connectPhase, setConnectPhase] = useState<TxPhase>('idle');
   const [txPhase, setTxPhase]           = useState<TxPhase>('idle');
@@ -995,9 +1325,30 @@ export default function App() {
   const [lastClaimTime, setLastClaimTime]           = useState<number | null>(null);
   const [timeUntilNextClaim, setTimeUntilNextClaim] = useState('Ready now!');
 
+  // New feature states
+  const [profile, setProfile]             = useState<PlayerProfile>(getProfile);
+  const [achievements, setAchievements]   = useState<Achievement[]>(getAchievements);
+  const [missions, setMissions]           = useState<Mission[]>(getMissions);
+  const [streak, setStreak]               = useState<StreakData>(getStreak);
+  const [shopPurchases, setShopPurchases] = useState<ShopPurchase>(getShopPurchases);
+  const [toasts, setToasts]               = useState<ToastData[]>([]);
+
+  const showToast = useCallback((message: string, type: ToastData['type'], icon?: IconName, color?: string) => {
+    const id = ++toastIdCounter;
+    setToasts(prev => [...prev, { id, message, type, icon, color }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
+  }, []);
+
+  const dismissToast = useCallback((id: number) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
+
+  // Coin balance derived from profile (persistent across runs)
+  const coinBalance = profile.coinBalance;
+
   useEffect(() => {
     const saved = localStorage.getItem('surfRushLastClaim');
-    if (saved) setLastClaimTime(parseInt(saved, 10));
+    if (saved) setLastClaimTime(Number(saved));
   }, []);
 
   useEffect(() => {
@@ -1023,6 +1374,48 @@ export default function App() {
   const canClaimRewardRef = useRef(canClaimReward);
   useEffect(() => { canClaimRewardRef.current = canClaimReward; }, [canClaimReward]);
 
+  // Helper: check & unlock achievement
+  const tryUnlock = useCallback((id: AchievementId, def: Achievement) => {
+    const wasNew = unlockAchievement(id);
+    if (wasNew) {
+      setAchievements(getAchievements());
+      showToast(`Achievement unlocked: ${def.title}`, 'achievement', def.icon as IconName, def.color);
+    }
+  }, [showToast]);
+
+  const checkAchievements = useCallback((score: number, coins: number, prof: PlayerProfile) => {
+    const all = getAchievements();
+    const byId = Object.fromEntries(all.map(a => [a.id, a]));
+    if (prof.totalGames >= 1) tryUnlock('first_run', byId['first_run']);
+    if (score >= 100)         tryUnlock('score_100', byId['score_100']);
+    if (score >= 500)         tryUnlock('score_500', byId['score_500']);
+    if (coins >= 100)         tryUnlock('coins_100', byId['coins_100']);
+  }, [tryUnlock]);
+
+  // Helper: update mission progress
+  const updateMissionProgress = useCallback((
+    type: 'coins' | 'games' | 'score' | 'life',
+    value: number
+  ) => {
+    const current = getMissions();
+    let changed = false;
+    const updated = current.map(m => {
+      if (m.claimed) return m;
+      let newProgress = m.progress;
+      if (type === 'coins'  && m.id === 'collect_coins') newProgress = Math.min(m.target, m.progress + value);
+      if (type === 'games'  && m.id === 'play_games')    newProgress = Math.min(m.target, m.progress + value);
+      if (type === 'score'  && m.id === 'reach_score')   newProgress = Math.max(m.progress, value);
+      if (type === 'life'   && m.id === 'use_extra_life') newProgress = Math.min(m.target, m.progress + value);
+      const completed = newProgress >= m.target;
+      if (newProgress !== m.progress || completed !== m.completed) changed = true;
+      return { ...m, progress: newProgress, completed };
+    });
+    if (changed) {
+      saveMissions(updated);
+      setMissions(updated);
+    }
+  }, []);
+
   useEffect(() => {
     initTelegram();
     const tgUser = getTelegramUser();
@@ -1031,9 +1424,8 @@ export default function App() {
       setPlayerName(name);
       playerNameRef.current = name;
     } else {
-      const name = 'Surfer';
-      setPlayerName(name);
-      playerNameRef.current = name;
+      setPlayerName('Surfer');
+      playerNameRef.current = 'Surfer';
     }
     setLeaderboard(getLeaderboard());
   }, []);
@@ -1063,15 +1455,13 @@ export default function App() {
       canvasRef.current = null;
       return;
     }
-
     if (canvas === canvasRef.current && engineRef.current) return;
-
     canvasRef.current = canvas;
     engineRef.current?.stop();
 
     const engine = new GameEngine(canvas, {
       onStateChange: (state) => setGameState(state),
-      onGameOver: (score, coins) => {
+      onGameOver: (score, coins, obstaclesAvoided) => {
         setFinalScore(score);
         setFinalCoins(coins);
 
@@ -1084,19 +1474,35 @@ export default function App() {
           ? playerNameRef.current
           : `Surfer #${runCountRef.current}`;
 
-        const updated = saveToLeaderboard({
-          name:  displayName,
-          score,
-          coins,
-          date:  new Date().toISOString(),
-        });
+        const updated = saveToLeaderboard({ name: displayName, score, coins, date: new Date().toISOString() });
         setLeaderboard(updated);
+
+        // Update profile
+        setProfile(prev => {
+          const newProf: PlayerProfile = {
+            ...prev,
+            totalGames:             prev.totalGames + 1,
+            highScore:              Math.max(prev.highScore, score),
+            totalCoinsEarned:       prev.totalCoinsEarned + coins,
+            coinBalance:            prev.coinBalance + coins,
+            totalObstaclesAvoided:  prev.totalObstaclesAvoided + obstaclesAvoided,
+            totalScoreSum:          prev.totalScoreSum + score,
+          };
+          saveProfile(newProf);
+          checkAchievements(score, coins, newProf);
+          return newProf;
+        });
+
+        // Update missions
+        updateMissionProgress('games', 1);
+        updateMissionProgress('coins', coins);
+        updateMissionProgress('score', score);
+
         setScreen('gameover');
       },
     });
-
     engineRef.current = engine;
-  }, []);
+  }, [checkAchievements, updateMissionProgress]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1114,7 +1520,6 @@ export default function App() {
   useEffect(() => {
     const area = gameAreaRef.current;
     if (!area) return;
-
     let startX = 0;
     const onTouchStart = (e: TouchEvent) => { startX = e.touches[0]?.clientX ?? 0; };
     const onTouchEnd   = (e: TouchEvent) => {
@@ -1123,7 +1528,6 @@ export default function App() {
       if (delta > 0) engineRef.current?.moveRight();
       else           engineRef.current?.moveLeft();
     };
-
     area.addEventListener('touchstart', onTouchStart, { passive: true });
     area.addEventListener('touchend',   onTouchEnd,   { passive: true });
     return () => {
@@ -1141,10 +1545,28 @@ export default function App() {
     setClaimSuccess(false);
     txInFlightRef.current = false;
     setLives(0);
+
+    // Streak update on first play of the day
+    const { streak: newStreak, bonusCoins, isNewDay } = updateStreak();
+    if (isNewDay) {
+      setStreak(newStreak);
+      if (bonusCoins > 0) {
+        setProfile(prev => {
+          const updated = { ...prev, coinBalance: prev.coinBalance + bonusCoins };
+          saveProfile(updated);
+          return updated;
+        });
+        showToast(`Streak Day ${newStreak.currentStreak}! +${bonusCoins} bonus coins`, 'streak', 'fire', '#f97316');
+      }
+    }
+
+    // Refresh missions for new day
+    setMissions(getMissions());
+
     requestAnimationFrame(() => {
       engineRef.current?.start();
     });
-  }, []);
+  }, [showToast]);
 
   const restartGame = useCallback(() => {
     setScreen('playing');
@@ -1155,6 +1577,7 @@ export default function App() {
     setClaimSuccess(false);
     txInFlightRef.current = false;
     setLives(0);
+    setMissions(getMissions());
     requestAnimationFrame(() => {
       engineRef.current?.restart();
     });
@@ -1164,121 +1587,100 @@ export default function App() {
     if (lives > 0) {
       setLives(l => l - 1);
       setScreen('playing');
-      requestAnimationFrame(() => {
-        engineRef.current?.addLife(0);
+      updateMissionProgress('life', 1);
+      // unlock achievement
+      const all = getAchievements();
+      const def = all.find(a => a.id === 'buy_extra_life');
+      if (def) tryUnlock('buy_extra_life', def);
+      requestAnimationFrame(() => { engineRef.current?.addLife(0); });
+    } else if (coinBalance >= EXTRA_LIFE_COST) {
+      setProfile(prev => {
+        const updated = { ...prev, coinBalance: prev.coinBalance - EXTRA_LIFE_COST };
+        saveProfile(updated);
+        return updated;
       });
-    } else if (finalCoins >= EXTRA_LIFE_COST) {
-      setFinalCoins(c => c - EXTRA_LIFE_COST);
       setScreen('playing');
-      requestAnimationFrame(() => {
-        engineRef.current?.addLife(EXTRA_LIFE_COST);
-      });
+      updateMissionProgress('life', 1);
+      const all = getAchievements();
+      const def = all.find(a => a.id === 'buy_extra_life');
+      if (def) tryUnlock('buy_extra_life', def);
+      requestAnimationFrame(() => { engineRef.current?.addLife(0); });
     }
-  }, [lives, finalCoins]);
+  }, [lives, coinBalance, updateMissionProgress, tryUnlock]);
 
-  const togglePause = useCallback(() => {
-    engineRef.current?.togglePause();
-  }, []);
+  const handleBuyShopItem = useCallback((item: 'shield' | 'magnet' | 'multiplier') => {
+    const costs: Record<string, number> = { shield: SHIELD_COST, magnet: MAGNET_COST, multiplier: MULTIPLIER_COST };
+    const cost = costs[item];
+    if (coinBalance < cost) return;
+    setProfile(prev => {
+      const updated = { ...prev, coinBalance: prev.coinBalance - cost };
+      saveProfile(updated);
+      return updated;
+    });
+    setShopPurchases(prev => {
+      const updated = { ...prev, [item]: prev[item] + 1 };
+      saveShopPurchases(updated);
+      return updated;
+    });
+    const labels: Record<string, string> = { shield: 'Shield', magnet: 'Magnet Boost', multiplier: 'Score Multiplier' };
+    showToast(`${labels[item]} purchased! Ready for next run.`, 'info', item as IconName, '#22d3ee');
+  }, [coinBalance, showToast]);
+
+  const togglePause = useCallback(() => { engineRef.current?.togglePause(); }, []);
 
   const handleConnectWallet = useCallback(async () => {
     if (connectInFlightRef.current) return;
     connectInFlightRef.current = true;
-
     setWalletError(null);
     setTxMessage(null);
-
     try {
       setConnectPhase('connecting-wallet');
-
       if (!isInjectedWalletAvailable() && isMobileDevice()) {
         setTxMessage('Opening MetaMask Mobile…');
       } else {
         setTxMessage('Requesting wallet access…');
         setConnectPhase('awaiting-approval');
       }
-
       const connected = await connectWallet();
-      setWallet(connected);
-      setWalletError(null);
-      setConnectPhase('confirmed');
-      setTxMessage(`${getWalletName()} connected: ${shortenAddress(connected.address!)}`);
-    } catch (err: any) {
-      if (err.code === 'DEEPLINK_REDIRECT') {
+      if (connected) {
+        setWallet(connected);
         setConnectPhase('idle');
-        setTxMessage('Opening MetaMask Mobile… return here after connecting.');
-        return;
+        setTxMessage(null);
       }
-
-      if (err.code === 'NO_WALLET') {
-        const msg = err.message;
-        setWalletError(msg);
-        setConnectPhase('failed');
-        setTxMessage(msg);
-        return;
-      }
-
-      if (
-        err.code === 4001 ||
-        err.message?.includes('rejected') ||
-        err.message?.includes('denied') ||
-        err.message?.includes('cancelled') ||
-        err.message?.includes('User rejected')
-      ) {
-        const msg = 'Connection cancelled. Tap "Connect Wallet" to try again.';
-        setWalletError(msg);
-        setConnectPhase('failed');
-        setTxMessage(msg);
-        return;
-      }
-
-      const msg = err instanceof Error ? err.message : 'Failed to connect wallet.';
-      setWalletError(msg);
-      setConnectPhase('failed');
-      setTxMessage(msg);
+    } catch (err: any) {
+      setConnectPhase('idle');
+      const msg = err.message ?? 'Wallet connection failed';
+      setWalletError(msg.length > 80 ? msg.slice(0, 80) + '…' : msg);
+      setTxMessage(null);
     } finally {
       connectInFlightRef.current = false;
     }
   }, [setWallet]);
 
   const handleDisconnectWallet = useCallback(() => {
-    setWallet(disconnectWallet());
-    setConnectPhase('idle');
-    setTxPhase('idle');
-    setTxMessage(null);
+    disconnectWallet();
+    setWallet({ address: null, provider: null, signer: null, chainId: null, networkName: null });
     setWalletError(null);
+    setConnectPhase('idle');
   }, [setWallet]);
 
   const handleCopyAddress = useCallback(() => {
-    if (!walletRef.current.address) return;
-    navigator.clipboard.writeText(walletRef.current.address).then(() => {
+    if (!wallet.address) return;
+    navigator.clipboard.writeText(wallet.address).then(() => {
       setCopyFeedback(true);
       setTimeout(() => setCopyFeedback(false), 2000);
-    });
-  }, []);
+    }).catch(() => {});
+  }, [wallet.address]);
 
   const handleSaveScoreOnChain = useCallback(async () => {
     if (txInFlightRef.current) return;
-
-    if (!REWARD_CONTRACT_DEPLOYED) {
-      setTxPhase('failed');
-      setTxMessage('On-chain saving is currently unavailable — no deployed contract is configured.');
-      return;
-    }
-
-    const signer = walletRef.current.signer;
-    if (!signer) {
-      setTxPhase('failed');
-      setTxMessage('Connect your wallet first, then save your score.');
-      return;
-    }
-
     txInFlightRef.current = true;
+    setTxPhase('awaiting-approval');
+    setTxMessage('Waiting for wallet approval…');
     try {
-      setTxPhase('awaiting-approval');
-      setTxMessage('Approve the transaction in your wallet…');
+      const signer = walletRef.current.signer;
+      if (!signer) throw new Error('No signer available. Please connect your wallet.');
       const hash = await saveScoreOnChain(signer, finalScore);
-      setTxPhase('submitted');
-      setTxMessage(`Transaction submitted: ${shortenAddress(hash)}`);
       setTxPhase('confirmed');
       setTxMessage(`Score saved on-chain! Tx: ${shortenAddress(hash)}`);
     } catch (err: any) {
@@ -1297,27 +1699,52 @@ export default function App() {
     if (claimInFlightRef.current) return;
     claimInFlightRef.current = true;
     setClaimLoading(true);
-
     try {
       if (!canClaimRewardRef.current) {
         setClaimSuccess(false);
         setClaimMessage('Daily reward already claimed. Check back in 24 hours.');
         return;
       }
-
-      setFinalCoins((prev) => prev + 500);
-
+      const REWARD = 500;
+      setProfile(prev => {
+        const updated = {
+          ...prev,
+          coinBalance: prev.coinBalance + REWARD,
+          dailyRewardsClaimed: prev.dailyRewardsClaimed + 1,
+        };
+        saveProfile(updated);
+        return updated;
+      });
       const now = Date.now();
       localStorage.setItem('surfRushLastClaim', String(now));
       setLastClaimTime(now);
-
       setClaimSuccess(true);
       setClaimMessage('Daily reward claimed! +500 coins added.');
+
+      // Achievement
+      const all = getAchievements();
+      const def = all.find(a => a.id === 'daily_claim');
+      if (def) tryUnlock('daily_claim', def);
     } finally {
       setClaimLoading(false);
       claimInFlightRef.current = false;
     }
-  }, []);
+  }, [tryUnlock]);
+
+  const handleClaimMission = useCallback((missionId: string) => {
+    const current = getMissions();
+    const mission = current.find(m => m.id === missionId);
+    if (!mission || !mission.completed || mission.claimed) return;
+    const updated = current.map(m => m.id === missionId ? { ...m, claimed: true } : m);
+    saveMissions(updated);
+    setMissions(updated);
+    setProfile(prev => {
+      const u = { ...prev, coinBalance: prev.coinBalance + mission.reward };
+      saveProfile(u);
+      return u;
+    });
+    showToast(`Mission complete: +${mission.reward} coins!`, 'mission', 'task', '#10b981');
+  }, [showToast]);
 
   const handleShareScore = useCallback(() => {
     shareScore(finalScore, TELEGRAM_BOT_USERNAME);
@@ -1335,13 +1762,12 @@ export default function App() {
 
   return (
     <div className="app">
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
 
       {/* Top Bar */}
       <div className="topbar">
         <div className="brand">
-          <span className="brand-icon">
-            <Icon name="wave" size={22} color="#22d3ee" />
-          </span>
+          <span className="brand-icon"><Icon name="wave" size={22} color="#22d3ee" /></span>
           <div className="brand-text">
             <span className="brand-title">SURF RUSH</span>
             <span className="brand-sub">WEB3</span>
@@ -1349,13 +1775,24 @@ export default function App() {
         </div>
 
         <div className="topbar-right">
+          {/* Coin balance display */}
+          <div className="topbar-balance">
+            <Icon name="coin" size={14} color="#f59e0b" />
+            <span>{coinBalance}</span>
+          </div>
+
+          {streak.currentStreak > 0 && (
+            <div className="topbar-streak">
+              <Icon name="fire" size={13} color="#f97316" />
+              <span>{streak.currentStreak}</span>
+            </div>
+          )}
+
           <button className="rules-btn" onClick={() => setShowRules(true)} type="button">
             How to Play
           </button>
 
-          {walletError && (
-            <div className="wallet-error-inline">{walletError}</div>
-          )}
+          {walletError && <div className="wallet-error-inline">{walletError}</div>}
 
           {wallet.address ? (
             <button className="wallet-btn connected" onClick={handleDisconnectWallet} type="button">
@@ -1386,7 +1823,7 @@ export default function App() {
 
       {/* HUD */}
       {screen === 'playing' && gameState && (
-        <Hud gameState={gameState} scoreAnim={scoreAnim} comboAnim={comboAnim} />
+        <Hud gameState={gameState} scoreAnim={scoreAnim} comboAnim={comboAnim} coinBalance={coinBalance} />
       )}
 
       {/* Power-up bar */}
@@ -1407,17 +1844,17 @@ export default function App() {
         ref={gameAreaRef}
         style={{ minHeight: '500px' }}
       >
-        <canvas
-          ref={initEngine}
-          style={{ display: 'block', width: '100%', height: '100%' }}
-        />
+        <canvas ref={initEngine} style={{ display: 'block', width: '100%', height: '100%' }} />
 
-        {screen === 'start' && <StartOverlay onStart={startGame} />}
+        {screen === 'start' && (
+          <StartOverlay onStart={startGame} streak={streak} profile={profile} />
+        )}
 
         {screen === 'gameover' && (
           <GameOverOverlay
             finalScore={finalScore}
             finalCoins={finalCoins}
+            coinBalance={coinBalance}
             isNewRecord={isNewRecord}
             timeUntilNextClaim={timeUntilNextClaim}
             canClaimReward={canClaimReward}
@@ -1450,15 +1887,30 @@ export default function App() {
         </div>
       )}
 
-      {/* Coin Shop */}
-      <CoinShopPanel />
+      {/* Profile Card */}
+      <ProfileCard profile={profile} streak={streak} />
 
-      {/* Leaderboard (collapsible) */}
+      {/* Daily Missions */}
+      <MissionsPanel missions={missions} onClaim={handleClaimMission} />
+
+      {/* Achievements */}
+      <AchievementsPanel achievements={achievements} />
+
+      {/* Statistics */}
+      <StatsPanel profile={profile} />
+
+      {/* Power-Up Shop */}
+      <CoinShopPanel
+        coinBalance={coinBalance}
+        shopPurchases={shopPurchases}
+        onBuyShopItem={handleBuyShopItem}
+      />
+
+      {/* Leaderboard */}
       <Leaderboard entries={leaderboard} walletConnected={!!wallet.address} />
 
       {/* Rules modal */}
       {showRules && <RulesModal onClose={() => setShowRules(false)} />}
-
     </div>
   );
 }

@@ -27,6 +27,8 @@ interface Entity {
 interface Obstacle extends Entity {
   type: ObstacleType;
   wobble: number;
+  /** true once the obstacle has passed the player without hitting */
+  passed: boolean;
 }
 
 interface MysteryBox extends Entity {
@@ -65,11 +67,12 @@ export interface GameState {
   freezeUntil: number;
   slowUntil: number;
   magnetUntil: number;
+  obstaclesAvoided: number;
 }
 
 export interface GameCallbacks {
   onStateChange: (state: GameState) => void;
-  onGameOver: (finalScore: number, finalCoins: number) => void;
+  onGameOver: (finalScore: number, finalCoins: number, obstaclesAvoided: number) => void;
 }
 
 const POSITIVE_BOXES: BoxType[] = ['coins', 'shield', 'magnet', 'speed', 'combo'];
@@ -253,6 +256,7 @@ export class GameEngine {
       freezeUntil:      0,
       slowUntil:        0,
       magnetUntil:      0,
+      obstaclesAvoided: 0,
     };
   }
 
@@ -477,6 +481,14 @@ export class GameEngine {
 
     this.handleCollisions();
 
+    // Count obstacles that successfully passed the player
+    for (const ob of this.obstacles) {
+      if (!ob.passed && ob.y > this.playerY + 60) {
+        ob.passed = true;
+        this.state.obstaclesAvoided += 1;
+      }
+    }
+
     this.obstacles = this.obstacles.filter(ob  => ob.y  < this.height + ob.height);
     this.boxes     = this.boxes.filter(    box => box.y < this.height + box.height);
 
@@ -501,6 +513,7 @@ export class GameEngine {
         height: 50 * sizeT,
         type,
         wobble: 0,
+        passed: false,
       });
     } else {
       const pool = Math.random() < 0.65 ? POSITIVE_BOXES : NEGATIVE_BOXES;
@@ -593,7 +606,7 @@ export class GameEngine {
     this.state.isGameOver = true;
     this.emitState();
     this.cancelLoop();
-    this.callbacks.onGameOver(this.state.score, this.state.coins);
+    this.callbacks.onGameOver(this.state.score, this.state.coins, this.state.obstaclesAvoided);
   }
 
   private emitState(): void {
@@ -601,277 +614,182 @@ export class GameEngine {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Rendering
+  // Render
   // ─────────────────────────────────────────────────────────────────────────
 
-  public renderIdleBackground(): void {
-    this.waveTime += 0.016;
+  private renderIdleBackground(): void {
     this.drawBackground();
-    this.drawLaneSeparators();
-    this.drawPlayerOnly(performance.now());
   }
 
   private render(): void {
     this.drawBackground();
-    this.drawLaneSeparators();
-    this.drawSpeedLines();
-
-    for (const ob  of this.obstacles) this.drawObstacle(ob);
-    for (const box of this.boxes)     this.drawMysteryBox(box);
-
+    this.drawFoam();
+    this.drawBubbles();
+    this.drawLaneLines();
     this.drawParticles();
-    this.drawMagnetField();
-    this.drawPlayerOnly(performance.now());
-    this.drawPauseOverlay();
+    for (const box of this.boxes)      this.drawMysteryBox(box);
+    for (const ob  of this.obstacles)  this.drawObstacle(ob);
+    this.drawPlayer();
+    if (this.state.isPaused) this.drawPauseOverlay();
   }
 
   private drawBackground(): void {
     const ctx = this.ctx;
-    const w   = this.width;
-    const h   = this.height;
-
     if (!this.bgGradientCache) {
-      const bg = ctx.createLinearGradient(0, 0, 0, h);
-      bg.addColorStop(0,    '#0c1445');
-      bg.addColorStop(0.35, '#0a3566');
-      bg.addColorStop(0.7,  '#0369a1');
-      bg.addColorStop(1,    '#0ea5e9');
-      this.bgGradientCache = bg;
+      const g = ctx.createLinearGradient(0, 0, 0, this.height);
+      g.addColorStop(0,   '#071a35');
+      g.addColorStop(0.4, '#0a2245');
+      g.addColorStop(1,   '#020916');
+      this.bgGradientCache = g;
     }
     ctx.fillStyle = this.bgGradientCache;
-    ctx.fillRect(0, 0, w, h);
-
-    if (!this.isLowPower) {
-      ctx.save();
-      for (let r = 0; r < 5; r++) {
-        const rx      = (w / 5) * r + w / 10;
-        const rayGrad = ctx.createLinearGradient(rx, 0, rx + 15, h * 0.6);
-        rayGrad.addColorStop(0, 'rgba(255,255,255,0.04)');
-        rayGrad.addColorStop(1, 'rgba(255,255,255,0)');
-        ctx.fillStyle = rayGrad;
-        ctx.beginPath();
-        ctx.moveTo(rx - 10, 0);
-        ctx.lineTo(rx + 10, 0);
-        ctx.lineTo(rx + 25 + Math.sin(this.waveTime * 0.5 + r) * 5, h * 0.6);
-        ctx.lineTo(rx - 5  + Math.sin(this.waveTime * 0.5 + r) * 5, h * 0.6);
-        ctx.closePath();
-        ctx.fill();
-      }
-      ctx.restore();
-    }
-
-    ctx.save();
-    for (const b of this.bubbles) {
-      ctx.beginPath();
-      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(255,255,255,${b.opacity})`;
-      ctx.lineWidth   = 0.8;
-      ctx.stroke();
-    }
-    ctx.restore();
+    ctx.fillRect(0, 0, this.width, this.height);
 
     for (const wl of this.waveLayers) {
-      ctx.save();
+      const yBase = wl.y * this.height;
       ctx.beginPath();
-      ctx.moveTo(0, h * wl.y);
-      const step = this.isLowPower ? 8 : 4;
-      for (let x = 0; x <= w; x += step) {
-        ctx.lineTo(x, h * wl.y + Math.sin(x * 0.025 + wl.offset) * wl.amplitude);
+      ctx.moveTo(0, yBase);
+      const segs = this.isLowPower ? 8 : 20;
+      for (let i = 0; i <= segs; i++) {
+        const x = (i / segs) * this.width;
+        const y = yBase + Math.sin((i / segs) * Math.PI * 4 + wl.offset) * wl.amplitude;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
       }
-      ctx.lineTo(w, h);
-      ctx.lineTo(0, h);
+      ctx.lineTo(this.width, this.height);
+      ctx.lineTo(0, this.height);
       ctx.closePath();
       ctx.fillStyle = wl.color;
       ctx.fill();
-      ctx.restore();
     }
-
-    ctx.save();
-    for (const f of this.foamParticles) {
-      ctx.beginPath();
-      ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(255,255,255,${(f.life / f.maxLife) * 0.25})`;
-      ctx.fill();
-    }
-    ctx.restore();
   }
 
-  private drawLaneSeparators(): void {
+  private drawFoam(): void {
+    if (this.isLowPower) return;
     const ctx = this.ctx;
+    for (const f of this.foamParticles) {
+      const alpha = (f.life / f.maxLife) * 0.18;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+      ctx.fill();
+    }
+  }
+
+  private drawBubbles(): void {
+    if (this.isLowPower) return;
+    const ctx = this.ctx;
+    for (const b of this.bubbles) {
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255,255,255,${b.opacity})`;
+      ctx.fill();
+    }
+  }
+
+  private drawLaneLines(): void {
+    const ctx = this.ctx;
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth   = 1;
+    ctx.setLineDash([12, 18]);
+    ctx.lineDashOffset = -(this.elapsedSeconds * 80 % 30);
     for (let i = 1; i < LANE_COUNT; i++) {
-      const x        = this.laneWidth * i;
-      const laneGrad = ctx.createLinearGradient(0, 0, 0, this.height);
-      laneGrad.addColorStop(0,   'rgba(56,189,248,0)');
-      laneGrad.addColorStop(0.3, 'rgba(56,189,248,0.3)');
-      laneGrad.addColorStop(0.7, 'rgba(56,189,248,0.3)');
-      laneGrad.addColorStop(1,   'rgba(56,189,248,0)');
-      ctx.strokeStyle = laneGrad;
-      ctx.lineWidth   = 1.5;
-      ctx.setLineDash([12, 8]);
+      const x = this.laneWidth * i;
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, this.height);
       ctx.stroke();
-      ctx.setLineDash([]);
     }
-  }
-
-  private drawSpeedLines(): void {
-    const now = performance.now();
-    if (now >= this.state.speedBoostUntil) return;
-    const ctx = this.ctx;
-    ctx.save();
-    ctx.globalAlpha = 0.15;
-    const count = this.isLowPower ? 4 : 8;
-    for (let i = 0; i < count; i++) {
-      const sx = Math.random() * this.width;
-      const sy = (this.waveTime * 300 * (i + 1) * 0.3) % this.height;
-      ctx.strokeStyle = '#7dd3fc';
-      ctx.lineWidth   = 1;
-      ctx.beginPath();
-      ctx.moveTo(sx, sy);
-      ctx.lineTo(sx, sy + 30);
-      ctx.stroke();
-    }
-    ctx.restore();
+    ctx.setLineDash([]);
+    ctx.lineDashOffset = 0;
   }
 
   private drawParticles(): void {
     const ctx = this.ctx;
-    ctx.save();
     for (const p of this.particles) {
       const alpha = p.life / p.maxLife;
       ctx.globalAlpha = alpha;
-      ctx.fillStyle   = p.color;
-      const sz = p.size * alpha;
       if (p.type === 'coin') {
         ctx.beginPath();
-        ctx.arc(p.x, p.y, sz, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, p.size * 0.6, 0, Math.PI * 2);
+        ctx.fillStyle = p.color;
         ctx.fill();
       } else {
-        ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * alpha, 0, Math.PI * 2);
+        ctx.fillStyle = p.color;
+        ctx.fill();
       }
     }
     ctx.globalAlpha = 1;
-    ctx.restore();
-  }
-
-  private drawMagnetField(): void {
-    const now = performance.now();
-    if (now >= this.state.magnetUntil) return;
-    const ctx  = this.ctx;
-    ctx.save();
-    const mp   = Math.sin(this.magnetPulse) * 0.5 + 0.5;
-    const mGrad = ctx.createRadialGradient(
-      this.playerX, this.playerY, 10,
-      this.playerX, this.playerY, 80
-    );
-    mGrad.addColorStop(0,   'rgba(249,115,22,0)');
-    mGrad.addColorStop(0.7, 'rgba(249,115,22,0.08)');
-    mGrad.addColorStop(1,   'rgba(249,115,22,0)');
-    ctx.fillStyle = mGrad;
-    ctx.beginPath();
-    ctx.arc(this.playerX, this.playerY, 70 + mp * 15, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
   }
 
   private drawPauseOverlay(): void {
-    if (!this.state.isPaused) return;
     const ctx = this.ctx;
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillStyle = 'rgba(2,9,22,0.55)';
     ctx.fillRect(0, 0, this.width, this.height);
-
-    ctx.save();
-    ctx.shadowColor = '#38bdf8';
-    ctx.shadowBlur  = 20;
-    ctx.fillStyle   = '#ffffff';
-    ctx.font        = 'bold 32px "Segoe UI", sans-serif';
-    ctx.textAlign   = 'center';
-    ctx.fillText('PAUSED', this.width / 2, this.height / 2 - 10);
-    ctx.restore();
-
-    ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.font      = '16px "Segoe UI", sans-serif';
+    ctx.font      = `bold 28px 'Orbitron', monospace`;
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
     ctx.textAlign = 'center';
-    ctx.fillText('Tap \u23F8 to continue', this.width / 2, this.height / 2 + 24);
+    ctx.textBaseline = 'middle';
+    ctx.fillText('PAUSED', this.width / 2, this.height / 2);
+    ctx.font      = `14px 'Inter', sans-serif`;
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillText('Press Space / P to resume', this.width / 2, this.height / 2 + 36);
   }
 
-  private drawPlayerOnly(now: number): void {
+  private drawPlayer(): void {
     const ctx = this.ctx;
-    const px  = this.playerX;
-    const py  = this.playerY;
+
+    // Shield glow
+    if (this.state.hasShield) {
+      const pulse = Math.sin(this.shieldPulse) * 0.3 + 0.7;
+      ctx.save();
+      ctx.translate(this.playerX, this.playerY);
+      ctx.globalAlpha = pulse * 0.6;
+      const sg = ctx.createRadialGradient(0, 0, 10, 0, 0, 50);
+      sg.addColorStop(0,   'rgba(34,211,238,0.6)');
+      sg.addColorStop(0.5, 'rgba(34,211,238,0.2)');
+      sg.addColorStop(1,   'rgba(34,211,238,0)');
+      ctx.fillStyle = sg;
+      ctx.beginPath();
+      ctx.arc(0, 0, 50, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+
+    // Magnet aura
+    const now = performance.now();
+    if (now < this.state.magnetUntil) {
+      ctx.save();
+      ctx.translate(this.playerX, this.playerY);
+      ctx.globalAlpha = 0.3 + Math.sin(this.magnetPulse) * 0.15;
+      const mg = ctx.createRadialGradient(0, 0, 10, 0, 0, 60);
+      mg.addColorStop(0,   'rgba(249,115,22,0.5)');
+      mg.addColorStop(1,   'rgba(249,115,22,0)');
+      ctx.fillStyle = mg;
+      ctx.beginPath();
+      ctx.arc(0, 0, 60, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
 
     ctx.save();
-    ctx.translate(px, py);
+    ctx.translate(this.playerX, this.playerY);
     ctx.rotate(this.playerTilt);
 
-    for (let s = 0; s < 3; s++) {
-      const sx       = (s - 1) * 12;
-      const wakeGrad = ctx.createLinearGradient(sx, 0, sx, 30);
-      wakeGrad.addColorStop(0, 'rgba(255,255,255,0.4)');
-      wakeGrad.addColorStop(1, 'rgba(255,255,255,0)');
-      ctx.fillStyle = wakeGrad;
-      ctx.beginPath();
-      ctx.moveTo(sx - 4, 0);
-      ctx.lineTo(sx + 4, 0);
-      ctx.lineTo(sx + 6, 32);
-      ctx.lineTo(sx - 6, 32);
-      ctx.closePath();
-      ctx.fill();
-    }
-
-    if (this.state.hasShield) {
-      const sp        = Math.sin(this.shieldPulse) * 0.4 + 0.6;
-      const shieldGrad = ctx.createRadialGradient(0, 0, 10, 0, 0, 45);
-      shieldGrad.addColorStop(0,   `rgba(34,211,238,0)`);
-      shieldGrad.addColorStop(0.6, `rgba(34,211,238,${sp * 0.2})`);
-      shieldGrad.addColorStop(1,   `rgba(34,211,238,${sp * 0.5})`);
-      ctx.fillStyle = shieldGrad;
-      ctx.beginPath();
-      ctx.arc(0, 0, 45, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = `rgba(34,211,238,${sp * 0.9})`;
-      ctx.lineWidth   = 2;
-      ctx.beginPath();
-      ctx.arc(0, 0, 40, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-
-    ctx.shadowColor = now < this.state.speedBoostUntil
-      ? '#10b981'
-      : 'rgba(56,189,248,0.6)';
-    ctx.shadowBlur = now < this.state.speedBoostUntil ? 18 : 12;
-
-    const boardGrad = ctx.createLinearGradient(-28, -10, 28, 14);
-    boardGrad.addColorStop(0,   '#f0f9ff');
-    boardGrad.addColorStop(0.4, '#e0f2fe');
-    boardGrad.addColorStop(1,   '#7dd3fc');
+    // Board
+    const boardGrad = ctx.createLinearGradient(-24, 20, 24, 28);
+    boardGrad.addColorStop(0,   '#38bdf8');
+    boardGrad.addColorStop(0.5, '#0284c7');
+    boardGrad.addColorStop(1,   '#1e40af');
     ctx.fillStyle = boardGrad;
     ctx.beginPath();
-    ctx.moveTo(0, -18);
-    ctx.bezierCurveTo(14, -14,  30, -4, 28,  8);
-    ctx.bezierCurveTo(26,  18, -26, 18, -28,  8);
-    ctx.bezierCurveTo(-30, -4, -14, -14,  0, -18);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.shadowBlur = 0;
-    const stripeGrad = ctx.createLinearGradient(-20, 0, 20, 0);
-    stripeGrad.addColorStop(0,   'transparent');
-    stripeGrad.addColorStop(0.2, '#0ea5e9');
-    stripeGrad.addColorStop(0.8, '#0ea5e9');
-    stripeGrad.addColorStop(1,   'transparent');
-    ctx.strokeStyle = stripeGrad;
-    ctx.lineWidth   = 2.5;
-    ctx.beginPath();
-    ctx.moveTo(-20, 2);
-    ctx.lineTo( 20, 2);
-    ctx.stroke();
-
-    ctx.fillStyle = '#0369a1';
-    ctx.beginPath();
-    ctx.moveTo( 0, 10);
+    ctx.moveTo(-22, 20);
+    ctx.bezierCurveTo(-24, 30, -16, 36, 0, 36);
+    ctx.bezierCurveTo(16,  36,  24, 30, 22, 20);
+    ctx.bezierCurveTo(20,  10,  -5, 20, 0, 20);
     ctx.lineTo(-5, 28);
     ctx.lineTo( 5, 28);
     ctx.closePath();
@@ -1146,4 +1064,265 @@ export function saveToLeaderboard(entry: LeaderboardEntry): LeaderboardEntry[] {
     // storage unavailable — ignore
   }
   return updated;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Player Profile (localStorage)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface PlayerProfile {
+  totalGames: number;
+  highScore: number;
+  totalCoinsEarned: number;
+  dailyRewardsClaimed: number;
+  coinBalance: number;
+  totalObstaclesAvoided: number;
+  totalScoreSum: number; // for average score calculation
+}
+
+const PROFILE_KEY = 'surfRushProfile';
+
+export function getProfile(): PlayerProfile {
+  try {
+    const raw = localStorage.getItem(PROFILE_KEY);
+    if (!raw) return defaultProfile();
+    const p = JSON.parse(raw) as PlayerProfile;
+    return { ...defaultProfile(), ...p };
+  } catch {
+    return defaultProfile();
+  }
+}
+
+function defaultProfile(): PlayerProfile {
+  return {
+    totalGames: 0,
+    highScore: 0,
+    totalCoinsEarned: 0,
+    dailyRewardsClaimed: 0,
+    coinBalance: 0,
+    totalObstaclesAvoided: 0,
+    totalScoreSum: 0,
+  };
+}
+
+export function saveProfile(p: PlayerProfile): void {
+  try {
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(p));
+  } catch {}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Achievements (localStorage)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type AchievementId =
+  | 'first_run'
+  | 'score_100'
+  | 'score_500'
+  | 'coins_100'
+  | 'daily_claim'
+  | 'buy_extra_life';
+
+export interface Achievement {
+  id: AchievementId;
+  title: string;
+  desc: string;
+  icon: string; // icon name from ICON_COMPONENTS
+  color: string;
+  unlocked: boolean;
+  unlockedAt?: string;
+}
+
+const ACHIEVEMENTS_KEY = 'surfRushAchievements';
+
+const ACHIEVEMENT_DEFS: Omit<Achievement, 'unlocked' | 'unlockedAt'>[] = [
+  { id: 'first_run',       title: 'First Wave',      desc: 'Complete your first run',          icon: 'surf',    color: '#22d3ee' },
+  { id: 'score_100',       title: 'Scoring!',         desc: 'Reach a score of 100',             icon: 'star',    color: '#f59e0b' },
+  { id: 'score_500',       title: 'Wave Rider',       desc: 'Reach a score of 500',             icon: 'trophy',  color: '#f59e0b' },
+  { id: 'coins_100',       title: 'Treasure Diver',   desc: 'Collect 100 coins in one run',     icon: 'coin',    color: '#f59e0b' },
+  { id: 'daily_claim',     title: 'Daily Grind',      desc: 'Claim your daily reward',          icon: 'gift',    color: '#10b981' },
+  { id: 'buy_extra_life',  title: 'Second Chance',    desc: 'Buy an extra life',                icon: 'heart',   color: '#ec4899' },
+];
+
+export function getAchievements(): Achievement[] {
+  try {
+    const raw = localStorage.getItem(ACHIEVEMENTS_KEY);
+    const saved: Partial<Record<AchievementId, { unlocked: boolean; unlockedAt?: string }>> =
+      raw ? JSON.parse(raw) : {};
+    return ACHIEVEMENT_DEFS.map(def => ({
+      ...def,
+      unlocked: saved[def.id]?.unlocked ?? false,
+      unlockedAt: saved[def.id]?.unlockedAt,
+    }));
+  } catch {
+    return ACHIEVEMENT_DEFS.map(def => ({ ...def, unlocked: false }));
+  }
+}
+
+export function unlockAchievement(id: AchievementId): boolean {
+  const achievements = getAchievements();
+  const target = achievements.find(a => a.id === id);
+  if (!target || target.unlocked) return false;
+  const saved: Record<string, { unlocked: boolean; unlockedAt: string }> = {};
+  for (const a of achievements) {
+    if (a.unlocked || a.id === id) {
+      saved[a.id] = { unlocked: true, unlockedAt: a.unlockedAt ?? new Date().toISOString() };
+    }
+  }
+  try {
+    localStorage.setItem(ACHIEVEMENTS_KEY, JSON.stringify(saved));
+  } catch {}
+  return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Daily Missions (localStorage)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface Mission {
+  id: string;
+  title: string;
+  desc: string;
+  icon: string;
+  target: number;
+  progress: number;
+  reward: number;
+  completed: boolean;
+  claimed: boolean;
+}
+
+const MISSIONS_KEY    = 'surfRushMissions';
+const MISSIONS_DATE_KEY = 'surfRushMissionsDate';
+
+const MISSION_TEMPLATES: Omit<Mission, 'progress' | 'completed' | 'claimed'>[] = [
+  { id: 'collect_coins', title: 'Coin Hunter',   desc: 'Collect 20 coins in total today',   icon: 'coin',   target: 20,  reward: 50  },
+  { id: 'play_games',    title: 'Dedicated',      desc: 'Play 3 games today',                icon: 'surf',   target: 3,   reward: 75  },
+  { id: 'reach_score',   title: 'High Scorer',    desc: 'Reach a score of 200 in one run',   icon: 'star',   target: 200, reward: 100 },
+  { id: 'use_extra_life',title: 'Never Give Up',  desc: 'Use an extra life',                 icon: 'heart',  target: 1,   reward: 60  },
+];
+
+function todayDateStr(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export function getMissions(): Mission[] {
+  try {
+    const savedDate = localStorage.getItem(MISSIONS_DATE_KEY);
+    if (savedDate !== todayDateStr()) {
+      // New day — reset missions
+      resetMissions();
+      return getMissions();
+    }
+    const raw = localStorage.getItem(MISSIONS_KEY);
+    if (!raw) return resetMissions();
+    return JSON.parse(raw) as Mission[];
+  } catch {
+    return resetMissions();
+  }
+}
+
+function resetMissions(): Mission[] {
+  const missions: Mission[] = MISSION_TEMPLATES.map(t => ({
+    ...t,
+    progress: 0,
+    completed: false,
+    claimed: false,
+  }));
+  try {
+    localStorage.setItem(MISSIONS_KEY,      JSON.stringify(missions));
+    localStorage.setItem(MISSIONS_DATE_KEY, todayDateStr());
+  } catch {}
+  return missions;
+}
+
+export function saveMissions(missions: Mission[]): void {
+  try {
+    localStorage.setItem(MISSIONS_KEY, JSON.stringify(missions));
+  } catch {}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Streak System (localStorage)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface StreakData {
+  currentStreak: number;
+  lastPlayDate: string | null;
+}
+
+const STREAK_KEY = 'surfRushStreak';
+
+export function getStreak(): StreakData {
+  try {
+    const raw = localStorage.getItem(STREAK_KEY);
+    if (!raw) return { currentStreak: 0, lastPlayDate: null };
+    return JSON.parse(raw) as StreakData;
+  } catch {
+    return { currentStreak: 0, lastPlayDate: null };
+  }
+}
+
+export function updateStreak(): { streak: StreakData; bonusCoins: number; isNewDay: boolean } {
+  const today = todayDateStr();
+  const data = getStreak();
+  const last = data.lastPlayDate;
+
+  let newStreak = data.currentStreak;
+  let bonusCoins = 0;
+  let isNewDay = false;
+
+  if (last === today) {
+    // Same day — no change
+    return { streak: data, bonusCoins: 0, isNewDay: false };
+  }
+
+  isNewDay = true;
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = yesterday.toISOString().slice(0, 10);
+
+  if (last === yesterdayStr) {
+    newStreak += 1;
+  } else {
+    newStreak = 1;
+  }
+
+  if      (newStreak >= 7)  bonusCoins = 250;
+  else if (newStreak >= 3)  bonusCoins = 100;
+  else if (newStreak >= 1)  bonusCoins = 50;
+
+  const updated: StreakData = { currentStreak: newStreak, lastPlayDate: today };
+  try {
+    localStorage.setItem(STREAK_KEY, JSON.stringify(updated));
+  } catch {}
+
+  return { streak: updated, bonusCoins, isNewDay };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Power-Up Shop purchases (localStorage)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ShopPurchase {
+  shield: number;
+  magnet: number;
+  multiplier: number;
+}
+
+const SHOP_KEY = 'surfRushShopPurchases';
+
+export function getShopPurchases(): ShopPurchase {
+  try {
+    const raw = localStorage.getItem(SHOP_KEY);
+    if (!raw) return { shield: 0, magnet: 0, multiplier: 0 };
+    return { shield: 0, magnet: 0, multiplier: 0, ...JSON.parse(raw) };
+  } catch {
+    return { shield: 0, magnet: 0, multiplier: 0 };
+  }
+}
+
+export function saveShopPurchases(p: ShopPurchase): void {
+  try {
+    localStorage.setItem(SHOP_KEY, JSON.stringify(p));
+  } catch {}
 }
