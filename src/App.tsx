@@ -21,16 +21,16 @@ import { initTelegram, getTelegramUser, shareScore } from './telegram';
 type Screen = 'start' | 'playing' | 'gameover';
 const TELEGRAM_BOT_USERNAME = 'your_bot_username';
 const EXTRA_LIFE_COST   = 100;
-const SHIELD_COST       = 200;
+const SHIELD_COST       = 150;
 const MAGNET_COST       = 150;
-const MULTIPLIER_COST   = 250;
+const MULTIPLIER_COST   = 200;
 const DAILY_REWARD_COINS = 500;
 
 function shorten(address: string) {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
-// ─── Pure SVG icons (no emoji, no unicode glyphs in UI) ──────────────────────
+// ─── Pure SVG icons ──────────────────────────────────────────────────────────
 interface SvgProps { size?: number; color?: string; }
 
 const Ic = {
@@ -190,6 +190,45 @@ const Ic = {
       <path d="M16 10a4 4 0 0 1-8 0" stroke={color} strokeWidth="2" strokeLinecap="round"/>
     </svg>
   ),
+  Settings: ({ size = 18, color = 'currentColor' }: SvgProps) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{ display:'inline-block', verticalAlign:'middle', flexShrink:0 }}>
+      <circle cx="12" cy="12" r="3" stroke={color} strokeWidth="2"/>
+      <path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" stroke={color} strokeWidth="2" strokeLinecap="round"/>
+    </svg>
+  ),
+  Close: ({ size = 16, color = 'currentColor' }: SvgProps) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{ display:'inline-block', verticalAlign:'middle', flexShrink:0 }}>
+      <path d="M18 6L6 18M6 6l12 12" stroke={color} strokeWidth="2.5" strokeLinecap="round"/>
+    </svg>
+  ),
+  ChevronDown: ({ size = 16, color = 'currentColor' }: SvgProps) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{ display:'inline-block', verticalAlign:'middle', flexShrink:0 }}>
+      <path d="M6 9l6 6 6-6" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  ),
+  ChevronUp: ({ size = 16, color = 'currentColor' }: SvgProps) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{ display:'inline-block', verticalAlign:'middle', flexShrink:0 }}>
+      <path d="M18 15l-6-6-6 6" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  ),
+  Volume: ({ size = 18, color = 'currentColor' }: SvgProps) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{ display:'inline-block', verticalAlign:'middle', flexShrink:0 }}>
+      <path d="M11 5L6 9H2v6h4l5 4V5z" stroke={color} strokeWidth="2" strokeLinejoin="round" fill={color} fillOpacity="0.15"/>
+      <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" stroke={color} strokeWidth="2" strokeLinecap="round"/>
+    </svg>
+  ),
+  VolumeOff: ({ size = 18, color = 'currentColor' }: SvgProps) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{ display:'inline-block', verticalAlign:'middle', flexShrink:0 }}>
+      <path d="M11 5L6 9H2v6h4l5 4V5z" stroke={color} strokeWidth="2" strokeLinejoin="round" fill={color} fillOpacity="0.15"/>
+      <path d="M23 9l-6 6M17 9l6 6" stroke={color} strokeWidth="2" strokeLinecap="round"/>
+    </svg>
+  ),
+  Refresh: ({ size = 18, color = 'currentColor' }: SvgProps) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{ display:'inline-block', verticalAlign:'middle', flexShrink:0 }}>
+      <path d="M1 4v6h6" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M3.51 15a9 9 0 1 0 .49-4.5" stroke={color} strokeWidth="2" strokeLinecap="round"/>
+    </svg>
+  ),
 } as const;
 
 type IconKey = keyof typeof Ic;
@@ -265,41 +304,44 @@ function Section({
         </span>
         <span className="section-title">{title}</span>
         {badge && <span className="section-badge">{badge}</span>}
-        <span className="chevron">{open ? '▲' : '▼'}</span>
+        <span className="section-chevron">
+          <Icon name={open ? 'ChevronUp' : 'ChevronDown'} size={15} color="rgba(186,230,253,0.4)" />
+        </span>
       </button>
       {open && <div className="section-body">{children}</div>}
     </div>
   );
 }
 
-// ─── FEATURE 1: Premium Player Dashboard ─────────────────────────────────────
+// ─── FEATURE 1 + 2: Premium Player Dashboard with Level & Rank System ─────────
 function PlayerDashboard({ profile, streak }: { profile: PlayerProfile; streak: StreakData }) {
-  const level      = profile.level;
-  const xpCurrent  = profile.xp - xpForLevel(level);
-  const xpNeeded   = xpForNextLevel(level) - xpForLevel(level);
-  const xpPct      = xpNeeded > 0 ? Math.min(100, Math.round((xpCurrent / xpNeeded) * 100)) : 100;
-  const rank       = rankTitle(level);
-  const avgScore   = profile.totalGames > 0
-    ? Math.round(profile.totalScoreSum / profile.totalGames) : 0;
+  const level     = profile.level;
+  const xpCurrent = profile.xp - xpForLevel(level);
+  const xpNeeded  = xpForNextLevel(level) - xpForLevel(level);
+  const xpPct     = xpNeeded > 0 ? Math.min(100, Math.round((xpCurrent / xpNeeded) * 100)) : 100;
+  const rank      = rankTitle(level);
+  const avgScore  = profile.totalGames > 0 ? Math.round(profile.totalScoreSum / profile.totalGames) : 0;
+
+  const rankColor = level >= 50 ? '#f59e0b' : level >= 30 ? '#a855f7' : level >= 20 ? '#22d3ee' : level >= 10 ? '#38bdf8' : level >= 5 ? '#10b981' : '#94a3b8';
 
   return (
     <Section
-      icon="User" iconColor="#22d3ee" title="Player Dashboard"
-      badge={<span className="db-rank-badge">{rank} Lv.{level}</span>}
+      icon="User" iconColor="#22d3ee" title="Player Profile"
+      badge={<span className="db-rank-badge" style={{ borderColor: rankColor, color: rankColor }}>{rank} · Lv.{level}</span>}
     >
       {/* Level + XP bar */}
       <div className="db-xp-row">
-        <div className="db-level-circle">
-          <span className="db-level-num">{level}</span>
+        <div className="db-level-circle" style={{ borderColor: rankColor }}>
+          <span className="db-level-num" style={{ color: rankColor }}>{level}</span>
           <span className="db-level-lbl">LVL</span>
         </div>
         <div className="db-xp-info">
           <div className="db-xp-header">
-            <span className="db-rank-label">{rank}</span>
+            <span className="db-rank-label" style={{ color: rankColor }}>{rank}</span>
             <span className="db-xp-numbers">{xpCurrent.toLocaleString()} / {xpNeeded.toLocaleString()} XP</span>
           </div>
           <div className="db-xp-bar-track">
-            <div className="db-xp-bar-fill" style={{ width: `${xpPct}%` }} />
+            <div className="db-xp-bar-fill" style={{ width: `${xpPct}%`, background: `linear-gradient(90deg, ${rankColor}99, ${rankColor})` }} />
           </div>
           <span className="db-xp-pct">{xpPct}% to Level {level + 1}</span>
         </div>
@@ -325,7 +367,7 @@ function PlayerDashboard({ profile, streak }: { profile: PlayerProfile; streak: 
         <div className="db-stat">
           <Icon name="Coin" size={18} color="#f59e0b" />
           <span className="db-stat-val">{profile.totalCoinsEarned.toLocaleString()}</span>
-          <span className="db-stat-lbl">Coins Earned</span>
+          <span className="db-stat-lbl">Total Earned</span>
         </div>
         <div className="db-stat">
           <Icon name="Coin" size={18} color="#a855f7" />
@@ -339,22 +381,42 @@ function PlayerDashboard({ profile, streak }: { profile: PlayerProfile; streak: 
         </div>
       </div>
 
-      {/* Streak */}
+      {/* Rank progression */}
+      <div className="db-rank-path">
+        <span className="db-rank-path-label">Rank Path</span>
+        <div className="db-rank-path-steps">
+          {[
+            { name: 'Beginner', minLvl: 1, color: '#94a3b8' },
+            { name: 'Surfer',   minLvl: 5, color: '#10b981' },
+            { name: 'Veteran',  minLvl: 10, color: '#38bdf8' },
+            { name: 'Expert',   minLvl: 20, color: '#22d3ee' },
+            { name: 'Master',   minLvl: 30, color: '#a855f7' },
+            { name: 'Legend',   minLvl: 50, color: '#f59e0b' },
+          ].map(r => (
+            <div key={r.name} className={`db-rank-step${level >= r.minLvl ? ' active' : ''}`} style={level >= r.minLvl ? { borderColor: r.color, color: r.color, background: `${r.color}18` } : {}}>
+              {r.name}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* FEATURE 4: Streak Bonus */}
       {streak.currentStreak > 0 && (
         <div className="db-streak-row">
-          <Icon name="Fire" size={16} color="#f97316" />
-          <span className="db-streak-text">
-            <strong>{streak.currentStreak}-day streak</strong>
-            {' — '}
-            {streak.currentStreak >= 7 ? '+250 bonus' : streak.currentStreak >= 3 ? '+100 bonus' : '+50 bonus'} daily
-          </span>
+          <div className="db-streak-left">
+            <Icon name="Fire" size={16} color="#f97316" />
+            <div className="db-streak-text">
+              <strong>{streak.currentStreak}-day streak</strong>
+              <span className="db-streak-bonus">
+                {streak.currentStreak >= 7 ? '+250' : streak.currentStreak >= 3 ? '+100' : '+50'} bonus coins daily
+              </span>
+            </div>
+          </div>
           <div className="db-streak-dots">
-            {[1, 3, 7].map(m => (
-              <span
-                key={m}
-                className={`db-streak-dot${streak.currentStreak >= m ? ' active' : ''}`}
-                title={`Day ${m}`}
-              >D{m}</span>
+            {[{ d: 1, label: 'D1' }, { d: 3, label: 'D3' }, { d: 7, label: 'D7' }].map(m => (
+              <span key={m.d} className={`db-streak-dot${streak.currentStreak >= m.d ? ' active' : ''}`}>
+                {m.label}
+              </span>
             ))}
           </div>
         </div>
@@ -363,7 +425,7 @@ function PlayerDashboard({ profile, streak }: { profile: PlayerProfile; streak: 
   );
 }
 
-// ─── FEATURE 2: Daily Missions ────────────────────────────────────────────────
+// ─── FEATURE 3: Daily Mission Claim System ────────────────────────────────────
 function DailyMissions({ missions, onClaim }: { missions: Mission[]; onClaim: (id: string) => void }) {
   const claimable = missions.filter(m => m.completed && !m.claimed).length;
   const done      = missions.filter(m => m.completed).length;
@@ -373,62 +435,63 @@ function DailyMissions({ missions, onClaim }: { missions: Mission[]; onClaim: (i
       icon="Task" iconColor="#10b981" title="Daily Missions"
       badge={
         claimable > 0
-          ? <span className="badge-green">{claimable} ready</span>
-          : <span>{done}/{missions.length}</span>
+          ? <span className="badge-green">{claimable} ready to claim</span>
+          : <span className="badge-neutral">{done}/{missions.length} done</span>
       }
       highlight={claimable > 0}
     >
       <div className="missions-list">
         {missions.map(m => {
-          const pct = Math.min(100, Math.round((m.progress / m.target) * 100));
+          const pct  = Math.min(100, Math.round((m.progress / m.target) * 100));
           const icon: IconKey = (m.icon as IconKey) in Ic ? (m.icon as IconKey) : 'Star';
           return (
-            <div
-              key={m.id}
-              className={`mission-row${m.claimed ? ' mission-claimed' : m.completed ? ' mission-done' : ''}`}
-            >
-              <div className="mission-icon-wrap">
-                <Icon name={icon} size={20} color={m.completed ? '#10b981' : '#475569'} />
-                {m.completed && !m.claimed && (
-                  <span className="mission-complete-ring" />
-                )}
-              </div>
-              <div className="mission-body">
-                <div className="mission-top-row">
+            <div key={m.id} className={`mission-card${m.claimed ? ' mission-claimed' : m.completed ? ' mission-done' : ''}`}>
+              <div className="mission-card-top">
+                <div className="mission-icon-wrap">
+                  <Icon name={icon} size={18} color={m.completed ? '#10b981' : '#475569'} />
+                </div>
+                <div className="mission-body">
                   <span className="mission-title">{m.title}</span>
-                  <span className={`mission-status-tag${m.claimed ? ' tag-claimed' : m.completed ? ' tag-done' : ''}`}>
-                    {m.claimed ? 'Claimed' : m.completed ? 'Complete' : `${m.progress}/${m.target}`}
-                  </span>
+                  <span className="mission-desc">{m.desc}</span>
                 </div>
-                <span className="mission-desc">{m.desc}</span>
-                <div className="mission-progress-wrap">
-                  <div className="mission-bar">
-                    <div
-                      className={`mission-bar-fill${m.completed ? ' mission-bar-complete' : ''}`}
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                  <span className="mission-pct">{pct}%</span>
+                <div className="mission-status-col">
+                  {m.claimed ? (
+                    <span className="mission-status-tag tag-claimed">
+                      <Icon name="Check" size={11} color="#10b981" /> Claimed
+                    </span>
+                  ) : m.completed ? (
+                    <span className="mission-status-tag tag-done">Complete</span>
+                  ) : (
+                    <span className="mission-status-tag tag-progress">{m.progress}/{m.target}</span>
+                  )}
                 </div>
               </div>
-              <div className="mission-reward-col">
+
+              <div className="mission-progress-wrap">
+                <div className="mission-bar">
+                  <div
+                    className={`mission-bar-fill${m.completed ? ' mission-bar-complete' : ''}`}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+                <span className="mission-pct">{pct}%</span>
+              </div>
+
+              <div className="mission-card-bottom">
+                <span className="mission-reward-label">
+                  <Icon name="Coin" size={12} color="#f59e0b" />
+                  <span>{m.reward} coins reward</span>
+                </span>
                 {m.claimed ? (
-                  <span className="mission-claimed-check"><Icon name="Check" size={14} color="#10b981" /></span>
-                ) : m.completed ? (
-                  <button
-                    className="mission-claim-btn"
-                    onClick={() => onClaim(m.id)}
-                    type="button"
-                  >
-                    <Icon name="Coin" size={12} color="#020916" />
-                    +{m.reward}
-                  </button>
-                ) : (
-                  <span className="mission-reward-preview">
-                    <Icon name="Coin" size={12} color="#f59e0b" />
-                    {m.reward}
+                  <span className="mission-claimed-badge">
+                    <Icon name="Check" size={12} color="#10b981" /> Claimed
                   </span>
-                )}
+                ) : m.completed ? (
+                  <button className="mission-claim-btn" onClick={() => onClaim(m.id)} type="button">
+                    <Icon name="Coin" size={12} color="#020916" />
+                    Claim +{m.reward}
+                  </button>
+                ) : null}
               </div>
             </div>
           );
@@ -438,15 +501,15 @@ function DailyMissions({ missions, onClaim }: { missions: Mission[]; onClaim: (i
   );
 }
 
-// ─── FEATURE 3: Power-Up Shop ─────────────────────────────────────────────────
+// ─── FEATURE 7: Reward Store ──────────────────────────────────────────────────
 interface ShopItem {
   key: 'shield' | 'magnet' | 'multiplier';
   icon: IconKey; color: string; name: string; desc: string; cost: number;
 }
 const SHOP_ITEMS: ShopItem[] = [
-  { key: 'shield',     icon: 'Shield', color: '#06b6d4', name: 'Shield',           desc: 'Start next run with a shield',     cost: SHIELD_COST     },
-  { key: 'magnet',     icon: 'Magnet', color: '#f97316', name: 'Magnet Boost',      desc: 'Attract coins for 6 seconds',      cost: MAGNET_COST     },
-  { key: 'multiplier', icon: 'Star',   color: '#f59e0b', name: 'Score Multiplier',  desc: 'Start with x2 combo active',       cost: MULTIPLIER_COST },
+  { key: 'shield',     icon: 'Shield', color: '#06b6d4', name: 'Shield',           desc: 'Start next run protected from one hit',    cost: SHIELD_COST     },
+  { key: 'magnet',     icon: 'Magnet', color: '#f97316', name: 'Magnet Boost',      desc: 'Attract all coins for 6 seconds',          cost: MAGNET_COST     },
+  { key: 'multiplier', icon: 'Star',   color: '#f59e0b', name: 'Score Multiplier',  desc: 'Start with x2 combo already active',       cost: MULTIPLIER_COST },
 ];
 
 function PowerUpShop({
@@ -458,36 +521,42 @@ function PowerUpShop({
 }) {
   return (
     <Section
-      icon="Cart" iconColor="#22d3ee" title="Power-Up Shop"
-      badge={<span className="badge-coins"><Icon name="Coin" size={12} color="#f59e0b" />{coinBalance}</span>}
+      icon="Cart" iconColor="#22d3ee" title="Reward Store"
+      badge={
+        <span className="badge-coins">
+          <Icon name="Coin" size={12} color="#f59e0b" />
+          <span>{coinBalance}</span>
+        </span>
+      }
     >
       <div className="shop-info-bar">
         <Icon name="Info" size={13} color="#94a3b8" />
-        <span>Purchased power-ups activate at the start of your next run.</span>
+        <span>Items activate at the start of your next run.</span>
       </div>
 
-      {/* Extra Life — context link only */}
+      {/* Extra Life — reference item */}
       <div className="shop-item shop-item-life">
         <div className="shop-item-icon-wrap">
           <Icon name="Heart" size={22} color="#f9a8d4" />
         </div>
         <div className="shop-item-details">
           <span className="shop-item-name">Extra Life</span>
-          <span className="shop-item-desc">Continue after wipeout — buy on Game Over screen</span>
+          <span className="shop-item-desc">Continue after wipeout — purchase on Game Over screen</span>
         </div>
-        <span className="shop-item-price">
-          <Icon name="Coin" size={13} color="#f59e0b" />{EXTRA_LIFE_COST}
-        </span>
+        <div className="shop-item-price-col">
+          <span className="shop-item-price">
+            <Icon name="Coin" size={13} color="#f59e0b" />
+            <span>{EXTRA_LIFE_COST}</span>
+          </span>
+          <span className="shop-item-context-note">Game Over only</span>
+        </div>
       </div>
 
       {SHOP_ITEMS.map(item => {
         const owned    = shopPurchases[item.key];
         const canAfford = coinBalance >= item.cost;
         return (
-          <div
-            key={item.key}
-            className={`shop-item shop-item-buyable${!canAfford ? ' shop-item-broke' : ''}`}
-          >
+          <div key={item.key} className={`shop-item shop-item-buyable${!canAfford ? ' shop-item-broke' : ''}`}>
             <div className="shop-item-icon-wrap">
               <Icon name={item.icon} size={22} color={item.color} />
             </div>
@@ -500,7 +569,8 @@ function PowerUpShop({
             </div>
             <div className="shop-item-action">
               <span className="shop-item-price">
-                <Icon name="Coin" size={12} color="#f59e0b" />{item.cost}
+                <Icon name="Coin" size={12} color="#f59e0b" />
+                <span>{item.cost}</span>
               </span>
               <button
                 className={`shop-buy-btn${canAfford ? ' buy-enabled' : ' buy-disabled'}`}
@@ -508,7 +578,7 @@ function PowerUpShop({
                 disabled={!canAfford}
                 type="button"
               >
-                {canAfford ? 'Buy' : `${item.cost - coinBalance} short`}
+                {canAfford ? 'Buy' : `Need ${item.cost - coinBalance} more`}
               </button>
             </div>
           </div>
@@ -518,7 +588,7 @@ function PowerUpShop({
   );
 }
 
-// ─── FEATURE 4: Boost Inventory ──────────────────────────────────────────────
+// ─── FEATURE 5 + 6: Power-Up Inventory + Pre-Run Boost Selection ──────────────
 function BoostInventory({
   shopPurchases, profile, onActivate,
 }: {
@@ -530,29 +600,26 @@ function BoostInventory({
     shopPurchases.shield + shopPurchases.magnet + shopPurchases.multiplier + profile.lives;
 
   const items = [
-    { key: 'life'       as const, icon: 'Heart'  as IconKey, color: '#f9a8d4', name: 'Extra Life',       count: profile.lives,          desc: 'Use on Game Over screen' },
-    { key: 'shield'     as const, icon: 'Shield' as IconKey, color: '#06b6d4', name: 'Shield',            count: shopPurchases.shield,    desc: 'Activates next run' },
-    { key: 'magnet'     as const, icon: 'Magnet' as IconKey, color: '#f97316', name: 'Magnet',            count: shopPurchases.magnet,    desc: 'Activates next run' },
-    { key: 'multiplier' as const, icon: 'Star'   as IconKey, color: '#f59e0b', name: 'x2 Multiplier',    count: shopPurchases.multiplier,desc: 'Activates next run' },
+    { key: 'life'       as const, icon: 'Heart'  as IconKey, color: '#f9a8d4', name: 'Extra Life',    count: profile.lives,           desc: 'Use on Game Over screen' },
+    { key: 'shield'     as const, icon: 'Shield' as IconKey, color: '#06b6d4', name: 'Shield',         count: shopPurchases.shield,    desc: 'Activates next run' },
+    { key: 'magnet'     as const, icon: 'Magnet' as IconKey, color: '#f97316', name: 'Magnet',         count: shopPurchases.magnet,    desc: 'Activates next run' },
+    { key: 'multiplier' as const, icon: 'Star'   as IconKey, color: '#f59e0b', name: 'x2 Multiplier', count: shopPurchases.multiplier, desc: 'Activates next run' },
   ];
 
   return (
     <Section
       icon="Bag" iconColor="#a855f7" title="Boost Inventory"
-      badge={<span>{totalItems} owned</span>}
+      badge={<span className="badge-neutral">{totalItems} owned</span>}
     >
       {totalItems === 0 ? (
         <div className="inventory-empty">
           <Icon name="Cart" size={28} color="#334155" />
-          <p>No boosts owned yet. Visit the Power-Up Shop above!</p>
+          <p>No boosts owned. Visit the Reward Store above to buy some!</p>
         </div>
       ) : (
         <div className="inventory-grid">
           {items.map(item => (
-            <div
-              key={item.key}
-              className={`inv-item${item.count === 0 ? ' inv-item-empty' : ''}`}
-            >
+            <div key={item.key} className={`inv-item${item.count === 0 ? ' inv-item-empty' : ''}`}>
               <div className="inv-icon" style={{ background: `${item.color}18`, borderColor: `${item.color}40` }}>
                 <Icon name={item.icon} size={24} color={item.count > 0 ? item.color : '#334155'} />
                 <span className="inv-count" style={{ color: item.count > 0 ? item.color : '#475569' }}>
@@ -568,14 +635,14 @@ function BoostInventory({
                   onClick={() => onActivate(item.key)}
                   type="button"
                 >
-                  Activate
+                  Queue for Next Run
                 </button>
               )}
               {item.key === 'life' && item.count > 0 && (
                 <span className="inv-life-note">Available on Game Over</span>
               )}
               {item.count === 0 && (
-                <span className="inv-empty-label">None</span>
+                <span className="inv-empty-label">None owned</span>
               )}
             </div>
           ))}
@@ -585,7 +652,7 @@ function BoostInventory({
   );
 }
 
-// ─── FEATURE 5: Post-Game Summary ────────────────────────────────────────────
+// ─── FEATURE 5 (Post-Game Run Summary card) ───────────────────────────────────
 interface PostGameSummaryProps {
   finalScore: number;
   finalCoins: number;
@@ -608,57 +675,79 @@ function PostGameSummary({
         <Icon name="Chart" size={16} color="#22d3ee" />
         <span>Run Summary</span>
         {isNewRecord && <span className="pgs-new-record">New Record!</span>}
-        <span className="chevron" style={{ marginLeft: 'auto' }}>{open ? '▲' : '▼'}</span>
+        <span className="pgs-chevron">
+          <Icon name={open ? 'ChevronUp' : 'ChevronDown'} size={14} color="rgba(186,230,253,0.4)" />
+        </span>
       </button>
+
       {open && (
         <div className="pgs-body">
-          {/* Core numbers */}
-          <div className="pgs-numbers">
-            <div className="pgs-num">
-              <span className="pgs-num-val" style={{ color: '#22d3ee' }}>
+          {/* Core numbers — clean separated rows */}
+          <div className="pgs-score-card">
+            <div className="pgs-score-row">
+              <span className="pgs-score-label">Score</span>
+              <span className="pgs-score-value" style={{ color: '#22d3ee' }}>
                 {finalScore.toLocaleString()}
               </span>
-              <span className="pgs-num-lbl">Score (ranking only)</span>
             </div>
-            <div className="pgs-num">
-              <span className="pgs-num-val" style={{ color: '#f59e0b', display:'flex', alignItems:'center', gap:4 }}>
-                <Icon name="Coin" size={18} color="#f59e0b" />{finalCoins}
+            <div className="pgs-divider" />
+            <div className="pgs-score-row">
+              <span className="pgs-score-label">Coins Earned This Run</span>
+              <span className="pgs-score-value" style={{ color: '#f59e0b' }}>
+                <Icon name="Coin" size={16} color="#f59e0b" />
+                <span>{finalCoins}</span>
               </span>
-              <span className="pgs-num-lbl">Coins earned this run</span>
             </div>
-            <div className="pgs-num">
-              <span className="pgs-num-val" style={{ color: '#a855f7', display:'flex', alignItems:'center', gap:4 }}>
-                <Icon name="Coin" size={18} color="#a855f7" />{coinBalance}
+            <div className="pgs-divider" />
+            <div className="pgs-score-row">
+              <span className="pgs-score-label">Current Coin Balance</span>
+              <span className="pgs-score-value" style={{ color: '#a855f7' }}>
+                <Icon name="Coin" size={16} color="#a855f7" />
+                <span>{coinBalance}</span>
               </span>
-              <span className="pgs-num-lbl">Total coin balance</span>
             </div>
-            <div className="pgs-num">
-              <span className="pgs-num-val" style={{ color: '#38bdf8' }}>
-                +{xpEarned} XP
+            <div className="pgs-divider" />
+            <div className="pgs-score-row">
+              <span className="pgs-score-label">XP Earned</span>
+              <span className="pgs-score-value" style={{ color: '#38bdf8' }}>
+                <Icon name="Xp" size={16} color="#38bdf8" />
+                <span>+{xpEarned} XP</span>
               </span>
-              <span className="pgs-num-lbl">Experience earned</span>
             </div>
+            {missionsCompleted.length > 0 && (
+              <>
+                <div className="pgs-divider" />
+                <div className="pgs-score-row">
+                  <span className="pgs-score-label">Missions Progressed</span>
+                  <span className="pgs-score-value" style={{ color: '#10b981' }}>
+                    <Icon name="Task" size={15} color="#10b981" />
+                    <span>{missionsCompleted.length}</span>
+                  </span>
+                </div>
+              </>
+            )}
           </div>
 
           {newLevel !== null && (
             <div className="pgs-level-up">
               <Icon name="Star" size={18} color="#f59e0b" />
-              <span>Level Up! You reached <strong>Level {newLevel}</strong> — {rankTitle(newLevel)}</span>
+              <span>Level Up! You are now <strong>Level {newLevel}</strong> — {rankTitle(newLevel)}</span>
             </div>
           )}
 
-          {/* Missions completed */}
+          {/* Missions completed detail */}
           {missionsCompleted.length > 0 && (
             <div className="pgs-section">
               <span className="pgs-section-label">
-                <Icon name="Task" size={13} color="#10b981" /> Missions Progressed
+                <Icon name="Task" size={13} color="#10b981" />
+                Missions Progressed
               </span>
               {missionsCompleted.map(m => (
                 <div key={m.id} className="pgs-row">
                   <Icon name="Check" size={13} color="#10b981" />
                   <span>{m.title}</span>
                   {m.completed && !m.claimed && (
-                    <span className="pgs-claim-hint">Claim reward above</span>
+                    <span className="pgs-claim-hint">Claim reward in Missions</span>
                   )}
                 </div>
               ))}
@@ -669,7 +758,8 @@ function PostGameSummary({
           {achievementsUnlocked.length > 0 && (
             <div className="pgs-section">
               <span className="pgs-section-label">
-                <Icon name="Medal" size={13} color="#f59e0b" /> Achievements Unlocked
+                <Icon name="Medal" size={13} color="#f59e0b" />
+                Achievements Unlocked
               </span>
               {achievementsUnlocked.map(a => (
                 <div key={a.id} className="pgs-row">
@@ -679,18 +769,46 @@ function PostGameSummary({
               ))}
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
 
-          {/* Suggested next action */}
-          <div className="pgs-suggestion">
-            <Icon name="Info" size={13} color="#94a3b8" />
-            <span>
-              {finalScore < 100
-                ? 'Tip: Collect combo boxes to multiply your score!'
-                : finalScore < 500
-                  ? 'Tip: Grab a Shield from the shop to survive longer.'
-                  : 'Great run! Claim your daily reward to boost your coin balance.'}
-            </span>
-          </div>
+// ─── FEATURE 9: Post-Game Recommendations ────────────────────────────────────
+function PostGameRecs({
+  finalScore, coinBalance, missions, onBuyLife, canClaim,
+}: {
+  finalScore: number; coinBalance: number; missions: Mission[];
+  onBuyLife: () => void; canClaim: boolean;
+}) {
+  const canAffordLife    = coinBalance >= EXTRA_LIFE_COST;
+  const claimableMission = missions.some(m => m.completed && !m.claimed);
+
+  return (
+    <div className="pgs-recs">
+      {canAffordLife && (
+        <div className="pgs-rec-item">
+          <Icon name="Heart" size={14} color="#f9a8d4" />
+          <span>You have enough coins to buy an extra life</span>
+        </div>
+      )}
+      {claimableMission && (
+        <div className="pgs-rec-item">
+          <Icon name="Task" size={14} color="#10b981" />
+          <span>Mission rewards are ready to claim below</span>
+        </div>
+      )}
+      {canClaim && (
+        <div className="pgs-rec-item">
+          <Icon name="Gift" size={14} color="#f59e0b" />
+          <span>Your daily reward is ready to claim</span>
+        </div>
+      )}
+      {finalScore > 0 && (
+        <div className="pgs-rec-item">
+          <Icon name="Trophy" size={14} color="#22d3ee" />
+          <span>Beat your high score of {finalScore.toLocaleString()} pts</span>
         </div>
       )}
     </div>
@@ -704,6 +822,7 @@ interface GameOverProps {
   claimLoading: boolean; claimMsg: string | null; claimOk: boolean;
   txLoading: boolean; txPhase: TxPhase; txMsg: string | null;
   wallet: WalletState; lives: number;
+  missions: Mission[];
   postGame: Omit<PostGameSummaryProps, 'finalScore'|'finalCoins'|'coinBalance'|'isNewRecord'>;
   onRestart: () => void; onShare: () => void;
   onSaveOnChain: () => void; onConnectWallet: () => void;
@@ -716,6 +835,7 @@ function GameOverOverlay({
   claimLoading, claimMsg, claimOk,
   txLoading, txPhase, txMsg,
   wallet, lives,
+  missions,
   postGame,
   onRestart, onShare, onSaveOnChain, onConnectWallet, onClaimReward, onBuyLife,
 }: GameOverProps) {
@@ -740,7 +860,7 @@ function GameOverOverlay({
           <p className="go-sub">Your run ended. Claim rewards or surf again.</p>
         </div>
 
-        {/* Post-game summary — Feature 5 */}
+        {/* Post-game summary */}
         <PostGameSummary
           finalScore={finalScore}
           finalCoins={finalCoins}
@@ -749,13 +869,24 @@ function GameOverOverlay({
           {...postGame}
         />
 
-        {/* Extra Life */}
+        {/* Feature 9: Recommendations */}
+        <PostGameRecs
+          finalScore={finalScore}
+          coinBalance={coinBalance}
+          missions={missions}
+          onBuyLife={onBuyLife}
+          canClaim={canClaimReward}
+        />
+
+        {/* Extra Life card */}
         <div className="go-card go-card-life">
-          <div className="go-card-title">
-            <Icon name="Heart" size={16} color="#f9a8d4" />
-            <span>Extra Life</span>
+          <div className="go-card-header">
+            <div className="go-card-title-row">
+              <Icon name="Heart" size={16} color="#f9a8d4" />
+              <span className="go-card-title">Extra Life</span>
+            </div>
             <span className="go-lives-tag">
-              {lives > 0 ? `${lives} free` : 'None free'}
+              {lives > 0 ? `${lives} free available` : 'No free lives'}
             </span>
           </div>
           <p className="go-card-desc">Continue your run from exactly where you crashed.</p>
@@ -775,22 +906,28 @@ function GameOverOverlay({
               <Icon name="Coin" size={14} color={canAffordLife ? '#f9a8d4' : '#475569'} />
               Buy Life — {EXTRA_LIFE_COST} coins
               {!canAffordLife && (
-                <span className="go-short"> (need {EXTRA_LIFE_COST - coinBalance} more)</span>
+                <span className="go-short">(need {EXTRA_LIFE_COST - coinBalance} more)</span>
               )}
             </button>
           </div>
         </div>
 
-        {/* Daily Reward */}
+        {/* Daily Reward card */}
         <div className="go-card go-card-reward">
-          <div className="go-card-title">
-            <Icon name="Gift" size={16} color="#f59e0b" />
-            <span>Daily Reward</span>
-            <span className="go-timer-tag" style={{ color: canClaimReward ? '#10b981' : '#94a3b8' }}>
-              {canClaimReward ? 'Ready!' : timeUntilNextClaim}
+          <div className="go-card-header">
+            <div className="go-card-title-row">
+              <Icon name="Gift" size={16} color="#f59e0b" />
+              <span className="go-card-title">Daily Reward</span>
+            </div>
+            <span className={`go-timer-tag${canClaimReward ? ' go-timer-ready' : ''}`}>
+              {canClaimReward ? 'Ready now!' : `Next in ${timeUntilNextClaim}`}
             </span>
           </div>
-          <p className="go-card-desc">+{DAILY_REWARD_COINS} coins — claimable once every 24 hours</p>
+          <p className="go-card-desc">
+            {canClaimReward
+              ? `Claim your +${DAILY_REWARD_COINS} coin daily bonus now.`
+              : `+${DAILY_REWARD_COINS} coins — available once every 24 hours.`}
+          </p>
           <button
             className={`go-btn${canClaimReward ? ' go-btn-primary' : ' go-btn-disabled'}`}
             onClick={onClaimReward}
@@ -801,7 +938,7 @@ function GameOverOverlay({
               ? <><span className="spinner" /> Claiming…</>
               : canClaimReward
                 ? <><Icon name="Gift" size={14} color="#020916" /> Claim +{DAILY_REWARD_COINS} Coins</>
-                : <>Next in {timeUntilNextClaim}</>}
+                : <>Next reward in {timeUntilNextClaim}</>}
           </button>
           {claimMsg && (
             <div className={`tx-status ${claimOk ? 'tx-success' : 'tx-error'}`}>{claimMsg}</div>
@@ -811,6 +948,7 @@ function GameOverOverlay({
         {/* Actions */}
         <div className="go-actions">
           <button className="go-btn go-btn-restart" onClick={onRestart} type="button">
+            <Icon name="Surf" size={16} color="#020916" />
             Surf Again
           </button>
           <button className="go-btn go-btn-share" onClick={onShare} type="button">
@@ -859,8 +997,8 @@ function Leaderboard({ entries, walletConnected }: { entries: LeaderboardEntry[]
 
   return (
     <Section
-      icon="Trophy" iconColor="#22d3ee" title="Leaderboard"
-      badge={<span>{entries.length} entries</span>}
+      icon="Trophy" iconColor="#f59e0b" title="Leaderboard"
+      badge={<span className="badge-neutral">{entries.length} entries</span>}
     >
       {entries.length === 0 ? (
         <p className="lb-empty">Complete a run to appear here!</p>
@@ -869,8 +1007,8 @@ function Leaderboard({ entries, walletConnected }: { entries: LeaderboardEntry[]
           {entries.map((e, i) => {
             const { label, cls } = rankMeta(i);
             return (
-              <div key={`${e.date}-${i}`} className={`lb-row${i < 3 ? ` lb-row-top` : ''}`}>
-                <div className={`lb-rank ${cls}`}>{label}</div>
+              <div key={`${e.date}-${i}`} className={`lb-row${i < 3 ? ' lb-row-top' : ''}`}>
+                <div className={`lb-rank-badge ${cls}`}>{label}</div>
                 <div className="lb-info">
                   <span className="lb-name">{e.name}</span>
                   <span className="lb-date">{new Date(e.date).toLocaleDateString()}</span>
@@ -878,7 +1016,8 @@ function Leaderboard({ entries, walletConnected }: { entries: LeaderboardEntry[]
                 <div className="lb-right">
                   <span className="lb-score">{e.score.toLocaleString()} pts</span>
                   <span className="lb-coins">
-                    <Icon name="Coin" size={11} color="#f59e0b" /> {e.coins}
+                    <Icon name="Coin" size={11} color="#f59e0b" />
+                    <span>{e.coins} coins</span>
                   </span>
                 </div>
               </div>
@@ -888,8 +1027,82 @@ function Leaderboard({ entries, walletConnected }: { entries: LeaderboardEntry[]
       )}
       <div className="lb-note">
         <Icon name="Info" size={12} color="#94a3b8" />
-        Score is for ranking only. Coins are spendable currency.
-        {walletConnected && ' Wallet connected.'}
+        <span>Score is for ranking only. Coins are spendable currency.{walletConnected && ' Wallet connected.'}</span>
+      </div>
+    </Section>
+  );
+}
+
+// ─── FEATURE 10: Settings Panel ───────────────────────────────────────────────
+function SettingsPanel({
+  soundEnabled, reducedAnimations,
+  onToggleSound, onToggleAnimations, onResetProgress,
+}: {
+  soundEnabled: boolean; reducedAnimations: boolean;
+  onToggleSound: () => void; onToggleAnimations: () => void; onResetProgress: () => void;
+}) {
+  const [confirmReset, setConfirmReset] = useState(false);
+
+  return (
+    <Section icon="Settings" iconColor="#94a3b8" title="Settings">
+      <div className="settings-list">
+        {/* Sound toggle */}
+        <div className="settings-row">
+          <div className="settings-info">
+            <Icon name={soundEnabled ? 'Volume' : 'VolumeOff'} size={16} color={soundEnabled ? '#22d3ee' : '#475569'} />
+            <div>
+              <span className="settings-label">Sound Effects</span>
+              <span className="settings-sub">{soundEnabled ? 'Audio is on' : 'Audio is off'}</span>
+            </div>
+          </div>
+          <button
+            className={`settings-toggle${soundEnabled ? ' toggle-on' : ' toggle-off'}`}
+            onClick={onToggleSound}
+            type="button"
+          >
+            <span className="toggle-knob" />
+          </button>
+        </div>
+
+        {/* Reduced animations */}
+        <div className="settings-row">
+          <div className="settings-info">
+            <Icon name="Bolt" size={16} color={!reducedAnimations ? '#22d3ee' : '#475569'} />
+            <div>
+              <span className="settings-label">Animations</span>
+              <span className="settings-sub">{reducedAnimations ? 'Reduced (better performance)' : 'Full animations'}</span>
+            </div>
+          </div>
+          <button
+            className={`settings-toggle${!reducedAnimations ? ' toggle-on' : ' toggle-off'}`}
+            onClick={onToggleAnimations}
+            type="button"
+          >
+            <span className="toggle-knob" />
+          </button>
+        </div>
+
+        {/* Reset */}
+        <div className="settings-reset-area">
+          {!confirmReset ? (
+            <button className="settings-reset-btn" onClick={() => setConfirmReset(true)} type="button">
+              <Icon name="Refresh" size={14} color="#ef4444" />
+              Reset All Local Progress
+            </button>
+          ) : (
+            <div className="settings-confirm">
+              <p>This permanently clears all coins, levels, missions and scores. Are you sure?</p>
+              <div className="settings-confirm-btns">
+                <button className="settings-confirm-yes" onClick={() => { onResetProgress(); setConfirmReset(false); }} type="button">
+                  Yes, reset everything
+                </button>
+                <button className="settings-confirm-no" onClick={() => setConfirmReset(false)} type="button">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </Section>
   );
@@ -919,7 +1132,9 @@ function RulesModal({ onClose }: { onClose: () => void }) {
               <p>Surf Rush — Web3 Edition</p>
             </div>
           </div>
-          <button className="modal-close" onClick={onClose} type="button">X</button>
+          <button className="modal-close" onClick={onClose} type="button">
+            <Icon name="Close" size={14} color="currentColor" />
+          </button>
         </div>
         <div className="modal-content">
           <div className="modal-section">
@@ -959,8 +1174,8 @@ function RulesModal({ onClose }: { onClose: () => void }) {
               <div className="svc-block svc-coins">
                 <span className="svc-title">Coins</span>
                 <ul>
-                  <li>Collected from coin boxes</li>
-                  <li>Spent in the Power-Up Shop</li>
+                  <li>Collected from coin boxes in-game</li>
+                  <li>Spent in the Reward Store</li>
                   <li>Earned from Daily Rewards and Missions</li>
                 </ul>
               </div>
@@ -985,7 +1200,11 @@ function StartScreen({ onStart, profile, streak }: { onStart: () => void; profil
     <div className="overlay start-overlay">
       <div className="start-content">
         <div className="start-logo">
-          <div className="start-waves"><Icon name="Wave" size={28} color="#22d3ee" /><Icon name="Wave" size={28} color="#22d3ee" /><Icon name="Wave" size={28} color="#22d3ee" /></div>
+          <div className="start-waves">
+            <Icon name="Wave" size={28} color="#22d3ee" />
+            <Icon name="Wave" size={28} color="#22d3ee" />
+            <Icon name="Wave" size={28} color="#22d3ee" />
+          </div>
           <h1 className="start-title">SURF RUSH</h1>
           <div className="start-badge"><Icon name="Chain" size={11} color="#22d3ee" /> Web3 Edition</div>
         </div>
@@ -1096,6 +1315,10 @@ export default function App() {
   const [shopPurchases, setShopPurchases] = useState<ShopPurchase>(getShopPurchases);
   const [toasts, setToasts]           = useState<{ id: number; msg: string; color: string; icon: IconKey }[]>([]);
 
+  // Feature 10: Settings
+  const [soundEnabled, setSoundEnabled]         = useState(() => localStorage.getItem('srSound') !== 'off');
+  const [reducedAnimations, setReducedAnimations] = useState(() => localStorage.getItem('srReducedAnim') === 'on');
+
   // Post-game summary data
   const [pgMissions, setPgMissions]       = useState<Mission[]>([]);
   const [pgAchievements, setPgAchievements] = useState<Achievement[]>([]);
@@ -1152,7 +1375,6 @@ export default function App() {
     }
   }, [gameState]);
 
-  // Unlock achievement helper
   const tryUnlock = useCallback((id: AchievementId): Achievement | null => {
     const wasNew = unlockAchievement(id);
     if (!wasNew) return null;
@@ -1163,7 +1385,6 @@ export default function App() {
     return a ?? null;
   }, [addToast]);
 
-  // Update mission progress helper
   const advanceMissions = useCallback((type: 'coins' | 'games' | 'score' | 'life', value: number) => {
     const cur = getMissions();
     let changed = false;
@@ -1182,7 +1403,6 @@ export default function App() {
     return updated;
   }, []);
 
-  // Engine init
   const initEngine = useCallback((canvas: HTMLCanvasElement | null) => {
     if (!canvas) { engineRef.current?.stop(); engineRef.current = null; canvasRef.current = null; return; }
     if (canvas === canvasRef.current && engineRef.current) return;
@@ -1202,11 +1422,9 @@ export default function App() {
         const name = nameRef.current !== 'Surfer' ? nameRef.current : `Surfer #${runNumRef.current}`;
         setLeaderboard(saveToLeaderboard({ name, score, coins, date: new Date().toISOString() }));
 
-        // XP
         const earnedXp  = xpForRun(score);
         const newlyUnlocked: Achievement[] = [];
 
-        // Update profile
         setProfile(prev => {
           const newXp    = prev.xp + earnedXp;
           const newLevel = levelFromXp(newXp);
@@ -1228,7 +1446,6 @@ export default function App() {
           setPgXp(earnedXp);
           setPgNewLevel(leveledUp ? newLevel : null);
 
-          // Check achievements
           const a1 = tryUnlock('first_run');        if (a1) newlyUnlocked.push(a1);
           if (score >= 100) { const a = tryUnlock('score_100'); if (a) newlyUnlocked.push(a); }
           if (score >= 500) { const a = tryUnlock('score_500'); if (a) newlyUnlocked.push(a); }
@@ -1237,7 +1454,6 @@ export default function App() {
           return np;
         });
 
-        // Update missions and capture for post-game summary
         const updatedMissions = advanceMissions('games', 1);
         advanceMissions('coins', coins);
         advanceMissions('score', score);
@@ -1251,7 +1467,6 @@ export default function App() {
     engineRef.current = engine;
   }, [tryUnlock, advanceMissions]);
 
-  // Keyboard
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (e.key === ' ') e.preventDefault();
@@ -1265,7 +1480,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', h);
   }, []);
 
-  // Touch
   useEffect(() => {
     const area = gameAreaRef.current;
     if (!area) return;
@@ -1337,9 +1551,9 @@ export default function App() {
   }, [coinBalance, addToast]);
 
   const handleActivateInventory = useCallback((key: 'shield' | 'magnet' | 'multiplier' | 'life') => {
-    if (key === 'life') return; // handled on game over screen
+    if (key === 'life') return;
     if (shopPurchases[key] <= 0) return;
-    addToast(`${key} boost will activate at the start of your next run.`, 'Bolt', '#10b981');
+    addToast(`${key} boost queued for your next run.`, 'Bolt', '#10b981');
   }, [shopPurchases, addToast]);
 
   const handleClaimReward = useCallback(() => {
@@ -1426,7 +1640,37 @@ export default function App() {
     } finally { txInFlight.current = false; }
   }, [finalScore]);
 
-  // Active effects during gameplay
+  // Feature 10: Settings handlers
+  const handleToggleSound = useCallback(() => {
+    setSoundEnabled(prev => {
+      const next = !prev;
+      localStorage.setItem('srSound', next ? 'on' : 'off');
+      return next;
+    });
+  }, []);
+
+  const handleToggleAnimations = useCallback(() => {
+    setReducedAnimations(prev => {
+      const next = !prev;
+      localStorage.setItem('srReducedAnim', next ? 'on' : 'off');
+      return next;
+    });
+  }, []);
+
+  const handleResetProgress = useCallback(() => {
+    ['surfRushProfile','surfRushLeaderboard','surfRushAchievements','surfRushMissions',
+     'surfRushMissionsDate','surfRushStreak','surfRushShopPurchases','surfRushLastClaim'].forEach(k => {
+      try { localStorage.removeItem(k); } catch {}
+    });
+    setProfile(getProfile());
+    setMissions(getMissions());
+    setStreak(getStreak());
+    setShopPurchases(getShopPurchases());
+    setLeaderboard([]);
+    setLastClaim(null);
+    addToast('Progress reset. Starting fresh!', 'Refresh', '#94a3b8');
+  }, [addToast]);
+
   const activeEffects = gameState ? ([
     gameState.hasShield                    && { icon: 'Shield' as IconKey, label: 'Shield', color: '#06b6d4' },
     Date.now() < gameState.magnetUntil     && { icon: 'Magnet' as IconKey, label: 'Magnet', color: '#f97316' },
@@ -1437,7 +1681,7 @@ export default function App() {
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div className="app">
+    <div className={`app${reducedAnimations ? ' reduced-animations' : ''}`}>
       <ToastStack items={toasts} dismiss={id => setToasts(p => p.filter(t => t.id !== id))} />
 
       {/* Top bar */}
@@ -1450,24 +1694,21 @@ export default function App() {
           </div>
         </div>
         <div className="topbar-right">
-          {/* Coin balance — always visible */}
           <div className="topbar-stat">
             <Icon name="Coin" size={15} color="#f59e0b" />
             <span>{coinBalance}</span>
           </div>
-          {/* Level chip */}
           <div className="topbar-stat topbar-level">
             <Icon name="Star" size={14} color="#a855f7" />
             <span>Lv.{profile.level}</span>
           </div>
-          {/* Streak */}
           {streak.currentStreak > 0 && (
             <div className="topbar-stat topbar-streak">
               <Icon name="Fire" size={13} color="#f97316" />
               <span>{streak.currentStreak}</span>
             </div>
           )}
-          <button className="rules-btn" onClick={() => setShowRules(true)} type="button">How to Play</button>
+          <button className="topbar-btn" onClick={() => setShowRules(true)} type="button">How to Play</button>
           {walletErr && <span className="wallet-err">{walletErr}</span>}
           {wallet.address ? (
             <button className="wallet-btn wallet-btn-connected" onClick={handleDisconnectWallet} type="button">
@@ -1544,6 +1785,7 @@ export default function App() {
             txMsg={txMsg}
             wallet={wallet}
             lives={lives}
+            missions={missions}
             postGame={{ missionsCompleted: pgMissions, achievementsUnlocked: pgAchievements, xpEarned: pgXp, newLevel: pgNewLevel }}
             onRestart={restartGame}
             onShare={() => shareScore(finalScore, TELEGRAM_BOT_USERNAME)}
@@ -1558,28 +1800,41 @@ export default function App() {
       {/* Mobile controls */}
       {screen === 'playing' && (
         <div className="controls">
-          <button className="ctrl-btn" onPointerDown={() => engineRef.current?.moveLeft()} type="button">L</button>
-          <button className="ctrl-btn pause-btn" onPointerDown={() => engineRef.current?.togglePause()} type="button">
-            {gameState?.isPaused ? 'Go' : 'II'}
+          <button className="ctrl-btn" onPointerDown={() => engineRef.current?.moveLeft()} type="button">
+            <Icon name="ChevronDown" size={20} color="currentColor" style={{ transform: 'rotate(90deg)' } as React.CSSProperties} />
           </button>
-          <button className="ctrl-btn" onPointerDown={() => engineRef.current?.moveRight()} type="button">R</button>
+          <button className="ctrl-btn pause-btn" onPointerDown={() => engineRef.current?.togglePause()} type="button">
+            {gameState?.isPaused ? 'GO' : 'II'}
+          </button>
+          <button className="ctrl-btn" onPointerDown={() => engineRef.current?.moveRight()} type="button">
+            <Icon name="ChevronDown" size={20} color="currentColor" style={{ transform: 'rotate(-90deg)' } as React.CSSProperties} />
+          </button>
         </div>
       )}
 
-      {/* Feature 1: Dashboard */}
+      {/* Dashboard */}
       <PlayerDashboard profile={profile} streak={streak} />
 
-      {/* Feature 2: Missions */}
+      {/* Missions */}
       <DailyMissions missions={missions} onClaim={handleClaimMission} />
 
-      {/* Feature 3: Shop */}
+      {/* Shop */}
       <PowerUpShop coinBalance={coinBalance} shopPurchases={shopPurchases} onBuy={handleBuyShopItem} />
 
-      {/* Feature 4: Inventory */}
+      {/* Inventory */}
       <BoostInventory shopPurchases={shopPurchases} profile={profile} onActivate={handleActivateInventory} />
 
       {/* Leaderboard */}
       <Leaderboard entries={leaderboard} walletConnected={!!wallet.address} />
+
+      {/* Settings */}
+      <SettingsPanel
+        soundEnabled={soundEnabled}
+        reducedAnimations={reducedAnimations}
+        onToggleSound={handleToggleSound}
+        onToggleAnimations={handleToggleAnimations}
+        onResetProgress={handleResetProgress}
+      />
 
       {showRules && <RulesModal onClose={() => setShowRules(false)} />}
     </div>
