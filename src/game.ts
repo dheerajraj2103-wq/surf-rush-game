@@ -32,12 +32,19 @@ export interface GameState {
   slowUntil: number;
   magnetUntil: number;
   obstaclesAvoided: number;
+  survivalSeconds: number;
+  coinsCollected: number;
+  boxesCollected: number;
+  shieldUsedThisRun: boolean;
 }
 
 export interface GameCallbacks {
   onStateChange: (state: GameState) => void;
-  onGameOver: (finalScore: number, finalCoins: number, obstaclesAvoided: number) => void;
+  onGameOver: (finalScore: number, finalCoins: number, obstaclesAvoided: number, survivalSeconds: number, coinsCollected: number, boxesCollected: number) => void;
   onCoinCollect?: (x: number, y: number) => void;
+  onShieldUsed?: () => void;
+  onMagnetCollected?: () => void;
+  onXpGain?: (amount: number) => void;
 }
 
 export interface GameStartOptions {
@@ -55,12 +62,8 @@ const MAX_SPEED  = 620;
 const SPEED_RAMP_PER_SEC = 4;
 const SAFE_START_SECONDS = 3;
 const DIFFICULTY_RAMP_SECONDS = 20;
-// Safe spawn distance: obstacles spawn far enough above screen that player can react
 const OBSTACLE_SPAWN_Y = -140;
-// Min distance between consecutive obstacles in same lane to avoid unfair stacking
-// Increased to ensure player has enough time and screen space to react
 const MIN_SAME_LANE_GAP = 280;
-// Additional minimum vertical gap from player to spawned obstacle (screen units)
 const PLAYER_SAFE_ZONE = 180;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -123,14 +126,12 @@ export class SoundEngine {
   }
 
   shield(): void {
-    // Shield activation / break: ascending arpeggio
     this.playTone(440, 0.05, 'sawtooth', 0.15, 0.3);
     setTimeout(() => this.playTone(660, 0.1, 'triangle', 0.15, 0.5), 50);
     setTimeout(() => this.playTone(880, 0.1, 'triangle', 0.12, 0.6), 120);
   }
 
   shieldActivate(): void {
-    // Distinct sound for shield being activated (purchased / started with)
     this.playTone(660, 0.12, 'triangle', 0.2, 0.4);
     setTimeout(() => this.playTone(880, 0.12, 'triangle', 0.18, 0.5), 80);
     setTimeout(() => this.playTone(1100, 0.15, 'triangle', 0.15, 0.6), 160);
@@ -142,7 +143,6 @@ export class SoundEngine {
   }
 
   magnetActivate(): void {
-    // Distinct magnetic hum when magnet activates
     this.playTone(180, 0.2, 'sine', 0.18, 0.3);
     setTimeout(() => this.playTone(240, 0.15, 'sine', 0.15, 0.4), 120);
     setTimeout(() => this.playTone(360, 0.12, 'triangle', 0.12, 0.5), 240);
@@ -172,7 +172,6 @@ export class SoundEngine {
 
 export const soundEngine = new SoundEngine();
 
-// Alias used by App.tsx — wraps soundEngine with enabled flag
 export const sfx = {
   get enabled() { return (soundEngine as any).enabled as boolean; },
   set enabled(v: boolean) { soundEngine.setEnabled(v); },
@@ -223,21 +222,20 @@ export class GameEngine {
   private magnetPulse = 0;
   private bgGradientCache: CanvasGradient | null = null;
 
-  // Shield hit flash animation
   private shieldHitFlash = 0;
-  // Shield save animation (full pulse ring)
   private shieldSaveAnim = 0;
-  // Coin magnet pull animation
   private magnetRingPulse = 0;
-  // Magnet activation burst
   private magnetActivateAnim = 0;
-  // Reward flash
+  private shieldActivateAnim = 0;
   private rewardFlash: { color: string; life: number } | null = null;
-  // XP pop animation (triggered externally via method)
   private xpPopAnim = 0;
-  // Coin collect streak counter for animation intensity
   private recentCoinCollects = 0;
   private coinStreakTimer = 0;
+  private floatingTexts: { x: number; y: number; text: string; color: string; life: number; maxLife: number; vy: number }[] = [];
+
+  // Run-level stats
+  private runCoinsCollected = 0;
+  private runBoxesCollected = 0;
 
   private isLowPower: boolean =
     typeof navigator !== 'undefined' &&
@@ -268,10 +266,8 @@ export class GameEngine {
 
   // ── Public API ──────────────────────────────────────────────────────────────
 
-  /** True once stop()/dispose has run — guards every public entry point against use-after-teardown. */
   private isDisposed = false;
 
-  /** Returns false (and logs) if the canvas is gone/detached/zero-sized — callers should bail out. */
   private isCanvasUsable(): boolean {
     if (this.isDisposed) return false;
     if (!this.canvas || !this.canvas.isConnected) return false;
@@ -287,25 +283,28 @@ export class GameEngine {
       if (!this.bubbles.length)    this.initBubbles();
       this.reset();
 
-      // Apply inventory boosts at start
       if (opts?.startWithShield) {
         this.state.hasShield = true;
+        this.shieldActivateAnim = 1.0;
         soundEngine.shieldActivate();
+        this.spawnFloatingText(this.playerX, this.playerY - 50, '🛡 Shield Active!', '#06b6d4');
       }
       if (opts?.startWithMagnet) {
         this.state.magnetUntil = performance.now() + 6000;
         this.magnetActivateAnim = 1.0;
         soundEngine.magnetActivate();
+        this.spawnFloatingText(this.playerX, this.playerY - 50, '🧲 Magnet Active!', '#f97316');
       }
-      if (opts?.startWithMultiplier) this.state.combo = 2;
+      if (opts?.startWithMultiplier) {
+        this.state.combo = 2;
+        this.spawnFloatingText(this.playerX, this.playerY - 50, 'x2 Multiplier!', '#f59e0b');
+      }
 
       this.emitState();
       this.lastTimestamp    = performance.now();
       this.animationFrameId = requestAnimationFrame(this.loop);
     } catch (e) {
       console.error('GameEngine.start error:', e);
-      // Recover into a safe, non-crashing idle state rather than leaving
-      // a half-initialized engine that would render nothing.
       this.state = this.defaultState();
       this.emitState();
     }
@@ -358,6 +357,7 @@ export class GameEngine {
 
       if (opts?.startWithShield) {
         this.state.hasShield = true;
+        this.shieldActivateAnim = 1.0;
         soundEngine.shieldActivate();
       }
       if (opts?.startWithMagnet) {
@@ -386,6 +386,7 @@ export class GameEngine {
       this.state.isGameOver = false;
       this.state.isPaused   = false;
       this.state.hasShield  = true;
+      this.shieldActivateAnim = 1.0;
       this.obstacles        = [];
       this.boxes            = [];
       this.spawnTimer       = 0;
@@ -396,7 +397,6 @@ export class GameEngine {
       this.animationFrameId = requestAnimationFrame(this.loop);
     } catch (e) {
       console.error('GameEngine.addLife error:', e);
-      // Keep state consistent (still alive) even if something above failed.
       this.state.isGameOver = false;
       this.state.isPaused   = false;
       this.emitState();
@@ -409,11 +409,6 @@ export class GameEngine {
     this.spawnXpParticles();
   }
 
-  /**
-   * Always returns a fully-formed, defensively-sanitized snapshot — never
-   * partial, never containing NaN/undefined — so React consumers can render
-   * it directly without null-checks blowing up the tree.
-   */
   public getState(): GameState { return this.sanitizeState(this.state); }
 
   // ── Private helpers ─────────────────────────────────────────────────────────
@@ -424,10 +419,13 @@ export class GameEngine {
       isGameOver: false, isPaused: false, hasShield: false,
       speedBoostUntil: 0, freezeUntil: 0, slowUntil: 0, magnetUntil: 0,
       obstaclesAvoided: 0,
+      survivalSeconds: 0,
+      coinsCollected: 0,
+      boxesCollected: 0,
+      shieldUsedThisRun: false,
     };
   }
 
-  /** Coerce a (possibly malformed) state object into a guaranteed-valid GameState. */
   private sanitizeState(s: Partial<GameState> | null | undefined): GameState {
     const safeNum = (v: unknown, fallback = 0): number => {
       const n = Number(v);
@@ -446,6 +444,10 @@ export class GameEngine {
       slowUntil:        Math.max(0, safeNum(s.slowUntil)),
       magnetUntil:      Math.max(0, safeNum(s.magnetUntil)),
       obstaclesAvoided: Math.max(0, safeNum(s.obstaclesAvoided)),
+      survivalSeconds:  Math.max(0, safeNum(s.survivalSeconds)),
+      coinsCollected:   Math.max(0, safeNum(s.coinsCollected)),
+      boxesCollected:   Math.max(0, safeNum(s.boxesCollected)),
+      shieldUsedThisRun: typeof s.shieldUsedThisRun === 'boolean' ? s.shieldUsedThisRun : false,
     };
   }
 
@@ -492,7 +494,6 @@ export class GameEngine {
   }
 
   private spawnCollectEffect(x: number, y: number, color: string, type: 'spark' | 'coin'): void {
-    // More particles for higher combo streaks
     const intensity = Math.min(3, 1 + this.recentCoinCollects * 0.3);
     const count = Math.round((type === 'coin' ? 12 : 10) * intensity);
     for (let i = 0; i < count; i++) {
@@ -501,12 +502,11 @@ export class GameEngine {
       this.particles.push({
         x, y,
         vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed - 30, // slight upward bias
+        vy: Math.sin(angle) * speed - 30,
         life: 0.7, maxLife: 0.7,
         color, size: Math.random() * 6 + 3, type,
       });
     }
-    // Coin ring burst
     if (type === 'coin') {
       for (let i = 0; i < 5; i++) {
         this.particles.push({
@@ -523,7 +523,6 @@ export class GameEngine {
   }
 
   private spawnMagnetPullEffect(fromX: number, fromY: number): void {
-    // Particles streaming from box position toward player
     const count = 6;
     for (let i = 0; i < count; i++) {
       const angle = Math.atan2(this.playerY - fromY, this.playerX - fromX);
@@ -580,9 +579,11 @@ export class GameEngine {
     }
   }
 
+  private spawnFloatingText(x: number, y: number, text: string, color: string): void {
+    this.floatingTexts.push({ x, y, text, color, life: 1.5, maxLife: 1.5, vy: -45 });
+  }
+
   private resize = (): void => {
-    // Canvas may already be detached (React unmounted it on game-over/reward
-    // transitions) — bail out safely instead of writing NaN/0 dimensions.
     if (!this.canvas) return;
     try {
       const parent = this.canvas.parentElement;
@@ -614,6 +615,7 @@ export class GameEngine {
 
   private reset(): void {
     this.obstacles = []; this.boxes = []; this.particles = []; this.foamParticles = [];
+    this.floatingTexts = [];
     this.spawnTimer = 0; this.elapsedSeconds = 0;
     this.playerLane    = 1;
     this.playerTargetX = this.laneCenter(1);
@@ -624,10 +626,13 @@ export class GameEngine {
     this.shieldSaveAnim = 0;
     this.magnetRingPulse = 0;
     this.magnetActivateAnim = 0;
+    this.shieldActivateAnim = 0;
     this.rewardFlash = null;
     this.xpPopAnim = 0;
     this.recentCoinCollects = 0;
     this.coinStreakTimer = 0;
+    this.runCoinsCollected = 0;
+    this.runBoxesCollected = 0;
     this.state         = this.defaultState();
     this.emitState();
   }
@@ -650,18 +655,12 @@ export class GameEngine {
   // ── Game loop ───────────────────────────────────────────────────────────────
 
   private loop = (timestamp: number): void => {
-    // Guard: never run if game is over, paused, or disposed
     if (this.isDisposed || this.state.isGameOver || this.state.isPaused) return;
-
-    // Guard: if the canvas was detached from the DOM (e.g. React swapped the
-    // game-over UI in mid-frame), stop quietly instead of drawing into a
-    // stale context, which can throw and otherwise leave a half-rendered frame.
     if (!this.isCanvasUsable()) {
       this.cancelLoop();
       return;
     }
 
-    // Clamp delta to prevent large jumps after tab-visibility changes etc.
     const raw = timestamp - this.lastTimestamp;
     const delta = Math.min(raw > 0 ? raw / 1000 : 0.016, 0.05);
     this.lastTimestamp   = timestamp;
@@ -672,13 +671,11 @@ export class GameEngine {
       this.update(delta);
       this.render();
     } catch (e) {
-      // Safety net: if something crashes in update/render, stop loop gracefully
       console.error('GameEngine loop error:', e);
       this.cancelLoop();
       return;
     }
 
-    // Only schedule next frame if game is still running
     if (!this.isDisposed && !this.state.isGameOver && !this.state.isPaused) {
       this.animationFrameId = requestAnimationFrame(this.loop);
     }
@@ -695,6 +692,7 @@ export class GameEngine {
     if (this.shieldHitFlash > 0)      this.shieldHitFlash = Math.max(0, this.shieldHitFlash - delta * 4);
     if (this.shieldSaveAnim > 0)      this.shieldSaveAnim = Math.max(0, this.shieldSaveAnim - delta * 1.5);
     if (this.magnetActivateAnim > 0)  this.magnetActivateAnim = Math.max(0, this.magnetActivateAnim - delta * 1.2);
+    if (this.shieldActivateAnim > 0)  this.shieldActivateAnim = Math.max(0, this.shieldActivateAnim - delta * 1.2);
     if (this.xpPopAnim > 0)           this.xpPopAnim = Math.max(0, this.xpPopAnim - delta * 2);
     if (this.coinStreakTimer > 0) {
       this.coinStreakTimer -= delta;
@@ -705,6 +703,13 @@ export class GameEngine {
       if (this.rewardFlash.life <= 0) this.rewardFlash = null;
     }
 
+    // Update floating texts
+    for (const ft of this.floatingTexts) {
+      ft.y += ft.vy * delta;
+      ft.life -= delta;
+    }
+    this.floatingTexts = this.floatingTexts.filter(ft => ft.life > 0);
+
     for (const wl of this.waveLayers) wl.offset += wl.speed * delta;
     for (const ob of this.obstacles)  { ob.y += speed * delta; ob.wobble += delta * 3; }
     for (const box of this.boxes)     { box.y += speed * delta; box.pulse += delta * 4; }
@@ -714,7 +719,7 @@ export class GameEngine {
       if (p.type !== 'magnet_pull' && p.type !== 'xp') {
         p.vy += 120 * delta;
       } else if (p.type === 'xp') {
-        p.vy -= 20 * delta; // xp floats up
+        p.vy -= 20 * delta;
       }
       p.life -= delta;
     }
@@ -737,6 +742,7 @@ export class GameEngine {
     if (this.spawnTimer >= spawnInterval) { this.spawnTimer = 0; this.spawnEntity(); }
 
     this.state.score += Math.round(speed * delta * 0.1);
+    this.state.survivalSeconds = this.elapsedSeconds;
 
     const now = performance.now();
 
@@ -748,7 +754,6 @@ export class GameEngine {
         const distY = Math.abs(box.y - this.playerY);
         if (distY < magnetRadius && box.lane !== this.playerLane) {
           if (box.y > this.height * 0.2 && box.y < this.playerY + 80) {
-            // Spawn magnet pull particles before snapping
             if (Math.random() < 0.3) {
               this.spawnMagnetPullEffect(boxX, box.y);
             }
@@ -776,22 +781,12 @@ export class GameEngine {
     const obstacleChance = introObstacleChance + (baseObstacleChance - introObstacleChance) * this.difficultyRamp();
 
     if (roll < obstacleChance) {
-      // ── Obstacle spawn with fairness checks ──────────────────────────────────
-
-      // 1. Compute the minimum Y position an obstacle needs to be to be "far enough"
-      //    from the player. We want spawned obstacles at OBSTACLE_SPAWN_Y, but we
-      //    also need to make sure no obstacle is sitting close to the player right now.
-      //    If the player zone is too crowded we skip entirely.
       const playerSafeTop = this.playerY - PLAYER_SAFE_ZONE;
 
-      // 2. Check how many lanes are currently "blocked" (have an obstacle that could
-      //    realistically hit the player soon or hasn't fully scrolled past the safe gap).
       const isLaneBlocked = (l: LaneIndex): boolean => {
         return this.obstacles.some(ob => {
           if (ob.lane !== l) return false;
-          // Obstacle is still on-screen and hasn't passed the player safe zone yet
           if (ob.y > 0 && ob.y < playerSafeTop) return true;
-          // Obstacle was just spawned (very near top) — still counts as blocking
           if (ob.y <= 0 && ob.y > OBSTACLE_SPAWN_Y - 20) return true;
           return false;
         });
@@ -800,10 +795,9 @@ export class GameEngine {
       const primaryBlocked = isLaneBlocked(lane);
 
       if (primaryBlocked) {
-        // Try alternate lanes — pick a random unblocked one
         const otherLanes = ([0, 1, 2] as LaneIndex[]).filter(l => l !== lane);
         const unblocked = otherLanes.filter(l => !isLaneBlocked(l));
-        if (unblocked.length === 0) return; // All lanes occupied — skip spawn
+        if (unblocked.length === 0) return;
 
         const altLane = unblocked[Math.floor(Math.random() * unblocked.length)];
         const type  = OBSTACLE_TYPES[Math.floor(Math.random() * OBSTACLE_TYPES.length)];
@@ -818,7 +812,6 @@ export class GameEngine {
         return;
       }
 
-      // Primary lane is clear — spawn normally
       const type  = OBSTACLE_TYPES[Math.floor(Math.random() * OBSTACLE_TYPES.length)];
       const sizeT = 0.8 + 0.2 * this.difficultyRamp();
       this.obstacles.push({
@@ -828,7 +821,6 @@ export class GameEngine {
         type, wobble: 0, passed: false,
       });
     } else {
-      // Mystery box — no fairness restrictions needed
       const pool = Math.random() < 0.65 ? POSITIVE_BOXES : NEGATIVE_BOXES;
       const type = pool[Math.floor(Math.random() * pool.length)];
       this.boxes.push({ lane, y: OBSTACLE_SPAWN_Y, width: this.laneWidth * 0.5, height: 40, type, pulse: 0 });
@@ -836,37 +828,28 @@ export class GameEngine {
   }
 
   private handleCollisions(): void {
-    // Grace period: no collisions during safe start
     if (this.elapsedSeconds < SAFE_START_SECONDS) return;
-    // Extra guard: player must be settled on screen
     if (this.playerY < 80) return;
 
-    const FUDGE = 0.44; // forgiving hitbox — feels fair without being too generous
+    const FUDGE = 0.44;
     const playerHalfW  = (this.laneWidth * 0.45) * FUDGE;
     const playerTop    = this.playerY - 28;
     const playerBottom = this.playerY + 22;
 
     for (const ob of this.obstacles) {
       if (ob.lane !== this.playerLane) continue;
-
-      // Obstacle must be fully visible on screen (not just spawned off-top)
       if (ob.y < 10) continue;
 
-      // Obstacle center must overlap player vertical zone
       const obTop    = ob.y - ob.height / 2;
       const obBottom = ob.y + ob.height / 2;
 
-      // No vertical overlap → skip
       if (obBottom < playerTop || obTop > playerBottom) continue;
 
-      // Horizontal overlap check (same lane, so just use half-widths)
       const obHalfW = (ob.width / 2) * FUDGE;
       const laneOffset = Math.abs(this.laneCenter(ob.lane) - this.playerX);
       if (laneOffset > obHalfW + playerHalfW) continue;
 
-      // Confirmed collision
       this.onObstacleHit(ob);
-      // Push obstacle off screen so it can't double-trigger
       ob.y = this.height + ob.height + 10;
     }
 
@@ -889,9 +872,12 @@ export class GameEngine {
   private onObstacleHit(_ob: Obstacle): void {
     if (this.state.hasShield) {
       this.state.hasShield = false;
+      this.state.shieldUsedThisRun = true;
       this.spawnShieldBreakEffect();
       soundEngine.shield();
-      this.emitState(); // Immediately emit so UI shows shield gone
+      this.spawnFloatingText(this.playerX, this.playerY - 60, '🛡 Shield Used!', '#06b6d4');
+      try { if (this.callbacks.onShieldUsed) this.callbacks.onShieldUsed(); } catch {}
+      this.emitState();
       return;
     }
     soundEngine.obstacle();
@@ -900,18 +886,22 @@ export class GameEngine {
 
   private onBoxCollected(box: MysteryBox): void {
     const now = performance.now();
+    this.runBoxesCollected++;
+    this.state.boxesCollected = this.runBoxesCollected;
+
     switch (box.type) {
       case 'coins': {
         const safeCombo = Number.isFinite(this.state.combo) ? this.state.combo : 1;
         const a = 10 * Math.max(1, safeCombo);
         this.state.coins += a;
         this.state.score += a;
+        this.runCoinsCollected++;
+        this.state.coinsCollected = this.runCoinsCollected;
         soundEngine.coin();
         soundEngine.combo(safeCombo);
-        // Track coin streak for animation
         this.recentCoinCollects++;
         this.coinStreakTimer = 1.5;
-        // Notify UI for floating text — never let a throwing callback crash the loop
+        this.spawnFloatingText(this.laneCenter(box.lane), box.y - 20, `+${a} 🪙`, '#f59e0b');
         if (this.callbacks.onCoinCollect) {
           try { this.callbacks.onCoinCollect(this.laneCenter(box.lane), box.y); } catch (e) {
             console.error('onCoinCollect callback error:', e);
@@ -921,65 +911,71 @@ export class GameEngine {
       }
       case 'shield':
         this.state.hasShield = true;
+        this.shieldActivateAnim = 1.0;
         soundEngine.shieldActivate();
+        this.spawnFloatingText(this.laneCenter(box.lane), box.y - 20, '🛡 Shield!', '#06b6d4');
         break;
       case 'magnet':
         this.state.magnetUntil = now + 6000;
         this.magnetActivateAnim = 1.0;
         soundEngine.magnetActivate();
+        this.spawnFloatingText(this.laneCenter(box.lane), box.y - 20, '🧲 Magnet!', '#f97316');
+        try { if (this.callbacks.onMagnetCollected) this.callbacks.onMagnetCollected(); } catch {}
         break;
       case 'speed':
         this.state.speedBoostUntil = now + 5000;
+        this.spawnFloatingText(this.laneCenter(box.lane), box.y - 20, '⚡ Speed!', '#10b981');
         break;
       case 'combo':
         this.state.combo = Math.min(Math.max(1, this.state.combo) + 1, 8);
         soundEngine.combo(this.state.combo);
+        this.spawnFloatingText(this.laneCenter(box.lane), box.y - 20, `x${this.state.combo} Combo!`, '#ec4899');
         break;
       case 'coinCut':
         this.state.coins = Math.max(0, this.state.coins - 20);
         this.state.combo = 1;
+        this.spawnFloatingText(this.laneCenter(box.lane), box.y - 20, '-20 Coins!', '#ef4444');
         break;
       case 'freeze':
         this.state.freezeUntil = now + 1200;
         this.state.combo = 1;
+        this.spawnFloatingText(this.laneCenter(box.lane), box.y - 20, '❄ Frozen!', '#60a5fa');
         break;
       case 'slowWave':
         this.state.slowUntil = now + 4000;
         this.state.combo = 1;
+        this.spawnFloatingText(this.laneCenter(box.lane), box.y - 20, '🌀 Slow!', '#0d9488');
         break;
     }
   }
 
   private endGame(): void {
-    if (this.state.isGameOver) return; // Prevent double-trigger
+    if (this.state.isGameOver) return;
     this.state.isGameOver = true;
     this.emitState();
     this.cancelLoop();
-    // Slight delay so last frame renders before callback fires
     setTimeout(() => {
       try {
-        const safeScore  = Number.isFinite(this.state.score)            ? Math.max(0, this.state.score)            : 0;
-        const safeCoins  = Number.isFinite(this.state.coins)            ? Math.max(0, this.state.coins)            : 0;
-        const safeAvoided= Number.isFinite(this.state.obstaclesAvoided) ? Math.max(0, this.state.obstaclesAvoided) : 0;
-        this.callbacks.onGameOver(safeScore, safeCoins, safeAvoided);
+        const safeScore   = Number.isFinite(this.state.score)            ? Math.max(0, this.state.score)            : 0;
+        const safeCoins   = Number.isFinite(this.state.coins)            ? Math.max(0, this.state.coins)            : 0;
+        const safeAvoided = Number.isFinite(this.state.obstaclesAvoided) ? Math.max(0, this.state.obstaclesAvoided) : 0;
+        const safeSurvival = Number.isFinite(this.elapsedSeconds)         ? Math.max(0, this.elapsedSeconds)         : 0;
+        const safeCoinsCollected = Math.max(0, this.runCoinsCollected);
+        const safeBoxesCollected = Math.max(0, this.runBoxesCollected);
+        this.callbacks.onGameOver(safeScore, safeCoins, safeAvoided, safeSurvival, safeCoinsCollected, safeBoxesCollected);
       } catch (e) {
         console.error('onGameOver callback error:', e);
-        // Last-resort fallback so the UI still receives a valid, safe call
-        try { this.callbacks.onGameOver(0, 0, 0); } catch {}
+        try { this.callbacks.onGameOver(0, 0, 0, 0, 0, 0); } catch {}
       }
     }, 50);
   }
 
   private emitState(): void {
     try {
-      // Always emit a fully-formed, sanitized state snapshot — never partial,
-      // never NaN. This is the single source of truth consumed by React.
       const snapshot: GameState = this.sanitizeState(this.state);
       this.callbacks.onStateChange(snapshot);
     } catch (e) {
       console.error('onStateChange callback error:', e);
-      // Last-resort fallback: try to deliver a guaranteed-safe default state
-      // rather than leaving the UI with a stale or partial snapshot.
       try { this.callbacks.onStateChange(this.defaultState()); } catch {}
     }
   }
@@ -994,8 +990,10 @@ export class GameEngine {
     this.drawBubbles();
     this.drawLaneLines();
     this.drawParticles();
-    // Draw magnet field ring
+
     const now = performance.now();
+
+    // Draw magnet field ring
     if (now < this.state.magnetUntil) {
       this.drawMagnetField();
     }
@@ -1003,10 +1001,16 @@ export class GameEngine {
     if (this.magnetActivateAnim > 0) {
       this.drawMagnetActivateBurst();
     }
+    // Shield activation burst
+    if (this.shieldActivateAnim > 0) {
+      this.drawShieldActivateBurst();
+    }
+
     for (const box of this.boxes)     this.drawMysteryBox(box);
     for (const ob  of this.obstacles) this.drawObstacle(ob);
     this.drawPlayer();
-    // Shield save ring (large expanding ring when shield saves)
+
+    // Shield save ring
     if (this.shieldSaveAnim > 0) {
       this.drawShieldSaveRing();
     }
@@ -1026,12 +1030,19 @@ export class GameEngine {
       this.ctx.fillStyle = `rgba(${r},${g},${b},${this.rewardFlash.life * 0.12})`;
       this.ctx.fillRect(0, 0, this.width, this.height);
     }
+
+    // Draw floating texts
+    this.drawFloatingTexts();
+
+    // Draw in-game powerup timers HUD
+    this.drawPowerupTimersHud();
+
     if (this.state.isPaused) this.drawPauseOverlay();
   }
 
   private drawShieldSaveRing(): void {
     const ctx = this.ctx;
-    const progress = 1 - this.shieldSaveAnim; // 0→1 as anim plays out
+    const progress = 1 - this.shieldSaveAnim;
     const radius = 40 + progress * 80;
     const alpha = this.shieldSaveAnim;
     ctx.save();
@@ -1041,11 +1052,36 @@ export class GameEngine {
     ctx.strokeStyle = `rgba(34,211,238,${alpha * 0.9})`;
     ctx.lineWidth = 4 * this.shieldSaveAnim;
     ctx.stroke();
-    // Second ring slightly larger
     ctx.beginPath();
     ctx.arc(0, 0, radius * 1.3, 0, Math.PI * 2);
     ctx.strokeStyle = `rgba(6,182,212,${alpha * 0.4})`;
     ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  private drawShieldActivateBurst(): void {
+    const ctx = this.ctx;
+    const alpha = this.shieldActivateAnim;
+    const progress = 1 - alpha;
+    ctx.save();
+    ctx.translate(this.playerX, this.playerY);
+    for (let i = 0; i < 12; i++) {
+      const angle = (Math.PI * 2 * i) / 12;
+      const r = 25 + progress * 65;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(angle) * 15, Math.sin(angle) * 15);
+      ctx.lineTo(Math.cos(angle) * r, Math.sin(angle) * r);
+      ctx.strokeStyle = `rgba(34,211,238,${alpha * 0.9})`;
+      ctx.lineWidth = 2.5 * alpha;
+      ctx.stroke();
+    }
+    // Expanding ring
+    const ringR = 20 + progress * 60;
+    ctx.beginPath();
+    ctx.arc(0, 0, ringR, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(125,211,252,${alpha * 0.7})`;
+    ctx.lineWidth = 3 * alpha;
     ctx.stroke();
     ctx.restore();
   }
@@ -1093,6 +1129,97 @@ export class GameEngine {
     ctx.setLineDash([4, 8]);
     ctx.stroke();
     ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  private drawFloatingTexts(): void {
+    const ctx = this.ctx;
+    for (const ft of this.floatingTexts) {
+      const ratio = ft.life / ft.maxLife;
+      const alpha = Math.min(1, ratio * 2);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.font = "bold 14px 'Orbitron', sans-serif";
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.strokeStyle = 'rgba(2,9,22,0.8)';
+      ctx.lineWidth = 3;
+      ctx.strokeText(ft.text, ft.x, ft.y);
+      ctx.fillStyle = ft.color;
+      ctx.fillText(ft.text, ft.x, ft.y);
+      ctx.restore();
+    }
+  }
+
+  private drawPowerupTimersHud(): void {
+    const ctx = this.ctx;
+    const now = performance.now();
+    const items: { label: string; color: string; remaining: number; total: number }[] = [];
+
+    if (this.state.hasShield) {
+      items.push({ label: '🛡', color: '#06b6d4', remaining: 1, total: 1 });
+    }
+    if (now < this.state.magnetUntil) {
+      const rem = (this.state.magnetUntil - now) / 1000;
+      items.push({ label: '🧲', color: '#f97316', remaining: rem, total: 6 });
+    }
+    if (now < this.state.speedBoostUntil) {
+      const rem = (this.state.speedBoostUntil - now) / 1000;
+      items.push({ label: '⚡', color: '#10b981', remaining: rem, total: 5 });
+    }
+    if (now < this.state.slowUntil) {
+      const rem = (this.state.slowUntil - now) / 1000;
+      items.push({ label: '🌀', color: '#0d9488', remaining: rem, total: 4 });
+    }
+    if (now < this.state.freezeUntil) {
+      const rem = (this.state.freezeUntil - now) / 1000;
+      items.push({ label: '❄', color: '#60a5fa', remaining: rem, total: 1.2 });
+    }
+
+    if (items.length === 0) return;
+
+    const startX = this.width - 12;
+    const startY = 12;
+    const itemH = 30;
+    const barW = 48;
+
+    ctx.save();
+    items.forEach((item, i) => {
+      const y = startY + i * (itemH + 4);
+      const pct = item.total > 1 ? Math.min(1, item.remaining / item.total) : 1;
+
+      // Background pill
+      ctx.fillStyle = 'rgba(2,9,22,0.75)';
+      ctx.beginPath();
+      ctx.roundRect(startX - barW - 22, y, barW + 22, itemH, 6);
+      ctx.fill();
+
+      // Emoji label
+      ctx.font = '14px serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(item.label, startX - barW - 20, y + itemH / 2);
+
+      // Timer bar bg
+      ctx.fillStyle = 'rgba(255,255,255,0.1)';
+      ctx.beginPath();
+      ctx.roundRect(startX - barW - 2, y + 8, barW, itemH - 16, 3);
+      ctx.fill();
+
+      // Timer bar fill
+      ctx.fillStyle = item.color;
+      ctx.beginPath();
+      ctx.roundRect(startX - barW - 2, y + 8, barW * pct, itemH - 16, 3);
+      ctx.fill();
+
+      // Timer text for timed items
+      if (item.total > 1) {
+        ctx.font = "bold 9px 'Inter', sans-serif";
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.fillText(`${item.remaining.toFixed(1)}s`, startX - barW / 2 - 2, y + itemH / 2);
+      }
+    });
     ctx.restore();
   }
 
@@ -1166,7 +1293,6 @@ export class GameEngine {
       const ratio = p.life / p.maxLife;
       ctx.globalAlpha = Math.max(0, Math.min(1, ratio));
       if (p.type === 'coin') {
-        // Coin particles: golden circle with shine
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size * ratio, 0, Math.PI * 2);
         ctx.fillStyle = p.color;
@@ -1176,7 +1302,6 @@ export class GameEngine {
         ctx.fillStyle = 'rgba(255,255,200,0.6)';
         ctx.fill();
       } else if (p.type === 'xp') {
-        // XP particles: star-like sparkle
         ctx.save();
         ctx.translate(p.x, p.y);
         ctx.rotate(ratio * Math.PI);
@@ -1190,7 +1315,6 @@ export class GameEngine {
         ctx.closePath(); ctx.fill();
         ctx.restore();
       } else if (p.type === 'magnet_pull') {
-        // Magnet pull: orange streaks
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size * 0.7, 0, Math.PI * 2);
         ctx.fillStyle = p.color;
@@ -1244,6 +1368,12 @@ export class GameEngine {
       ctx.strokeStyle = `rgba(125,211,252,${shieldAlpha})`;
       ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.arc(0, 0, 36, 0, Math.PI * 2); ctx.stroke();
+      // Shield icon indicator above player
+      ctx.globalAlpha = 0.85;
+      ctx.font = '13px serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('🛡', 0, -54);
       ctx.globalAlpha = 1;
       ctx.restore();
     }
@@ -1260,7 +1390,7 @@ export class GameEngine {
       mg.addColorStop(1, 'rgba(249,115,22,0)');
       ctx.fillStyle = mg;
       ctx.beginPath(); ctx.arc(0, 0, 60, 0, Math.PI * 2); ctx.fill();
-      // Magnet status indicator bar
+      // Magnet arc timer
       const magnetRemaining = Math.max(0, (this.state.magnetUntil - now) / 6000);
       ctx.globalAlpha = 0.7;
       ctx.strokeStyle = 'rgba(249,115,22,0.4)';
@@ -1268,6 +1398,13 @@ export class GameEngine {
       ctx.beginPath();
       ctx.arc(0, 0, 48, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * magnetRemaining);
       ctx.stroke();
+      // Magnet icon indicator above player
+      ctx.globalAlpha = 0.85;
+      const iconY = this.state.hasShield ? -66 : -54;
+      ctx.font = '13px serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('🧲', 0, iconY);
       ctx.globalAlpha = 1;
       ctx.restore();
     }
@@ -1391,16 +1528,13 @@ export class GameEngine {
     ctx.fillStyle = glow;
     ctx.beginPath(); ctx.arc(0, 0, 28, 0, Math.PI * 2); ctx.fill();
 
-    // Box body
     ctx.fillStyle = glowColor; ctx.shadowColor = glowColor; ctx.shadowBlur = 14;
     ctx.beginPath(); ctx.roundRect(-18, -18, 36, 36, 8); ctx.fill();
     ctx.shadowBlur = 0;
 
-    // Shine
     ctx.fillStyle = 'rgba(255,255,255,0.2)';
     ctx.beginPath(); ctx.roundRect(-14, -14, 28, 14, 5); ctx.fill();
 
-    // Draw SVG-style label using canvas text (no emoji — pure geometric)
     this.drawBoxLabel(box.type);
 
     ctx.restore();
@@ -1418,11 +1552,9 @@ export class GameEngine {
 
     switch (type) {
       case 'coins': {
-        // Coin circle
         ctx.beginPath(); ctx.arc(0, 0, 9, 0, Math.PI * 2);
         ctx.fillStyle = '#020916'; ctx.fill();
         ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
-        // Dollar sign
         ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.moveTo(0, -6); ctx.lineTo(0, 6); ctx.stroke();
         ctx.beginPath(); ctx.arc(0, -2, 4, Math.PI * 0.2, Math.PI * 1.8); ctx.stroke();
@@ -1456,7 +1588,6 @@ export class GameEngine {
       case 'speed': {
         ctx.fillStyle = '#020916';
         ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
-        // Lightning bolt
         ctx.beginPath();
         ctx.moveTo(2, -11); ctx.lineTo(-4, 1); ctx.lineTo(1, 1);
         ctx.lineTo(-2, 11); ctx.lineTo(6, -2); ctx.lineTo(1, -2); ctx.closePath();
@@ -1464,7 +1595,6 @@ export class GameEngine {
         break;
       }
       case 'combo': {
-        // Flame shape
         ctx.fillStyle = '#020916';
         ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.8;
         ctx.beginPath();
@@ -1477,14 +1607,12 @@ export class GameEngine {
         break;
       }
       case 'coinCut': {
-        // X mark
         ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5;
         ctx.beginPath(); ctx.moveTo(-7, -7); ctx.lineTo(7, 7); ctx.stroke();
         ctx.beginPath(); ctx.moveTo(7, -7); ctx.lineTo(-7, 7); ctx.stroke();
         break;
       }
       case 'freeze': {
-        // Snowflake
         ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
         for (let a = 0; a < 4; a++) {
           ctx.save();
@@ -1497,7 +1625,6 @@ export class GameEngine {
         break;
       }
       case 'slowWave': {
-        // Swirl
         ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.arc(0, 0, 8, 0, Math.PI * 1.7, false);
@@ -1510,7 +1637,6 @@ export class GameEngine {
   }
 
   private hexToRgb(hex: string): [number, number, number] {
-    // Defensive: handle malformed hex strings gracefully
     if (!hex || hex.length < 7) return [128, 128, 128];
     try {
       const r = parseInt(hex.slice(1, 3), 16);
@@ -1575,71 +1701,40 @@ export interface PlayerProfile {
   lives: number;
 }
 
-/** XP needed to reach a given level (level 1 = 0 XP) */
 export function xpForLevel(level: number): number {
   if (!level || level <= 1) return 0;
   return Math.floor(100 * Math.pow(level - 1, 1.5));
 }
 
-/** XP needed to reach next level from current level */
 export function xpForNextLevel(level: number): number {
-  return xpForLevel((level ?? 1) + 1);
+  return xpForLevel(Math.max(2, level + 1));
 }
 
-/** Compute level from total XP */
-export function levelFromXp(xp: number): number {
-  const safeXp = Math.max(0, xp ?? 0);
-  let lv = 1;
-  while (xpForLevel(lv + 1) <= safeXp) lv++;
-  return lv;
-}
-
-/** XP earned per run (score / 10, capped) */
 export function xpForRun(score: number): number {
-  return Math.min(500, Math.floor(Math.max(0, score ?? 0) / 10));
+  if (!score || score <= 0) return 0;
+  return Math.floor(Math.sqrt(Math.max(0, score)) * 2);
 }
 
-/** Human-readable rank title based on level (matching required Player Titles) */
+export function levelFromXp(xp: number): number {
+  if (!xp || xp <= 0) return 1;
+  let level = 1;
+  while (xpForLevel(level + 1) <= xp) level++;
+  return Math.max(1, level);
+}
+
 export function rankTitle(level: number): string {
-  const lv = level ?? 1;
-  if (lv >= 50) return 'Surf Legend';
-  if (lv >= 30) return 'Ocean Master';
-  if (lv >= 20) return 'Wave Rider';
-  if (lv >= 10) return 'Veteran';
-  if (lv >= 5)  return 'Rookie Surfer';
+  if (level >= 50) return 'Legend';
+  if (level >= 30) return 'Master';
+  if (level >= 20) return 'Expert';
+  if (level >= 10) return 'Veteran';
+  if (level >= 5)  return 'Surfer';
   return 'Beginner';
-}
-
-/** Level rewards — coins awarded when leveling up */
-export function levelReward(level: number): number {
-  const lv = level ?? 1;
-  if (lv >= 50) return 1000;
-  if (lv >= 30) return 500;
-  if (lv >= 20) return 300;
-  if (lv >= 10) return 200;
-  if (lv >= 5)  return 100;
-  return 50;
-}
-
-/** XP requirements table for tooltip display */
-export function xpRequirementsTable(): { level: number; xpRequired: number; rank: string; reward: number }[] {
-  const milestones = [1, 2, 3, 4, 5, 10, 15, 20, 25, 30, 40, 50];
-  return milestones.map(lv => ({
-    level: lv,
-    xpRequired: xpForLevel(lv),
-    rank: rankTitle(lv),
-    reward: levelReward(lv),
-  }));
 }
 
 const PROFILE_KEY = 'surfRushProfile';
 
 function defaultProfile(): PlayerProfile {
-  return {
-    totalGames: 0, highScore: 0, totalCoinsEarned: 0,
-    dailyRewardsClaimed: 0, coinBalance: 0, totalObstaclesAvoided: 0,
-    totalScoreSum: 0, xp: 0, level: 1, lives: 0,
-  };
+  return { totalGames: 0, highScore: 0, totalCoinsEarned: 0, dailyRewardsClaimed: 0, coinBalance: 0, totalObstaclesAvoided: 0, totalScoreSum: 0, xp: 0, level: 1, lives: 0 };
 }
 
 export function getProfile(): PlayerProfile {
@@ -1647,9 +1742,7 @@ export function getProfile(): PlayerProfile {
     const raw = localStorage.getItem(PROFILE_KEY);
     if (!raw) return defaultProfile();
     const parsed = JSON.parse(raw);
-    // Merge with defaults to ensure all fields are present and valid
     const merged = { ...defaultProfile(), ...parsed };
-    // Defensive: sanitize numeric fields to prevent NaN propagation
     merged.totalGames           = Math.max(0, Number(merged.totalGames)           || 0);
     merged.highScore            = Math.max(0, Number(merged.highScore)            || 0);
     merged.totalCoinsEarned     = Math.max(0, Number(merged.totalCoinsEarned)     || 0);
@@ -1660,7 +1753,6 @@ export function getProfile(): PlayerProfile {
     merged.xp                   = Math.max(0, Number(merged.xp)                  || 0);
     merged.level                = Math.max(1, Number(merged.level)                || 1);
     merged.lives                = Math.max(0, Number(merged.lives)                || 0);
-    // Recompute level from xp to keep in sync
     merged.level = levelFromXp(merged.xp);
     return merged;
   } catch { return defaultProfile(); }
@@ -1669,7 +1761,6 @@ export function getProfile(): PlayerProfile {
 export function saveProfile(p: PlayerProfile): void {
   if (!p) return;
   try {
-    // Sanitize before saving to prevent corrupt state
     const safe: PlayerProfile = {
       totalGames:            Math.max(0, Number(p.totalGames)            || 0),
       highScore:             Math.max(0, Number(p.highScore)             || 0),
@@ -1716,7 +1807,7 @@ const ACHIEVEMENT_DEFS: Omit<Achievement, 'unlocked' | 'unlockedAt'>[] = [
   { id: 'coins_100',    title: 'Treasure Diver',    desc: 'Collect 100 coins in one run',        icon: 'Coin',    color: '#f59e0b' },
   { id: 'coins_500',    title: 'Gold Rush',         desc: 'Collect 500 coins in one run',        icon: 'Coin',    color: '#fcd34d' },
   { id: 'daily_claim',  title: 'Daily Grind',       desc: 'Claim your daily reward',             icon: 'Gift',    color: '#10b981' },
-  { id: 'buy_extra_life','title': 'Second Chance',  desc: 'Purchase an extra life',              icon: 'Heart',   color: '#ec4899' },
+  { id: 'buy_extra_life', title: 'Second Chance',   desc: 'Purchase an extra life',              icon: 'Heart',   color: '#ec4899' },
   { id: 'streak_3',     title: '3-Day Warrior',     desc: 'Maintain a 3-day play streak',        icon: 'Fire',    color: '#f97316' },
   { id: 'streak_7',     title: 'Week Warrior',      desc: 'Maintain a 7-day play streak',        icon: 'Fire',    color: '#ef4444' },
   { id: 'level_5',      title: 'Rookie Surfer',     desc: 'Reach Level 5',                       icon: 'Star',    color: '#10b981' },
@@ -1955,37 +2046,21 @@ export function openMysteryBox(): MysteryReward {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Daily Reward Store  —  safe claim helper used by App.tsx
-// Centralised here so the reward-claim path is auditable and crash-proof.
+// Daily Reward Store
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface DailyRewardResult {
   success: boolean;
   newCoinBalance: number;
   coinsAdded: number;
-  /** Full updated profile snapshot — prefer this over a follow-up getProfile()
-   *  call to avoid any read-after-write race that could hand the UI a stale
-   *  or partially-updated object. */
   profile: PlayerProfile;
   error?: string;
 }
 
-// Re-entrancy guard: prevents a double-tap / double-dispatch on the claim
-// button from crediting coins twice or racing two localStorage writes,
-// which is a common root cause of "claim reward → blank screen" bugs when
-// the UI re-renders twice with inconsistent intermediate state.
 let dailyClaimInFlight = false;
 
-/**
- * Safely claim a daily reward amount and credit it to the player profile.
- * Returns the updated profile + coin balance. Never throws — all errors are
- * caught and returned in the result object so the UI can handle them without
- * crashing or rendering a blank screen.
- */
 export function claimDailyReward(coinsToAdd: number): DailyRewardResult {
   if (dailyClaimInFlight) {
-    // A claim is already being processed (e.g. duplicate click/tap event) —
-    // return the current profile unchanged rather than double-crediting.
     const current = getProfile();
     return {
       success: false,
@@ -1998,7 +2073,7 @@ export function claimDailyReward(coinsToAdd: number): DailyRewardResult {
   dailyClaimInFlight = true;
   try {
     const amount = Number.isFinite(coinsToAdd) ? Math.max(0, coinsToAdd) : 0;
-    const profile = getProfile(); // always returns a valid, sanitized object
+    const profile = getProfile();
     const newBalance = Math.max(0, profile.coinBalance + amount);
     const updatedProfile: PlayerProfile = {
       ...profile,
@@ -2007,14 +2082,10 @@ export function claimDailyReward(coinsToAdd: number): DailyRewardResult {
       dailyRewardsClaimed: Math.max(0, profile.dailyRewardsClaimed + 1),
     };
     saveProfile(updatedProfile);
-    // Re-read after save to guarantee the returned profile reflects exactly
-    // what's persisted (defends against any sanitization clamping in saveProfile).
     const confirmed = getProfile();
     return { success: true, newCoinBalance: confirmed.coinBalance, coinsAdded: amount, profile: confirmed };
   } catch (e) {
     console.error('claimDailyReward error:', e);
-    // Attempt to read current profile as fallback — never let the UI receive
-    // an undefined/partial profile even when something above failed.
     let fallbackProfile = defaultProfile();
     try { fallbackProfile = getProfile(); } catch {}
     return {

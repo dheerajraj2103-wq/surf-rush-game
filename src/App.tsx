@@ -567,6 +567,10 @@ function PlayerDashboard({ profile, streak, wallet }: { profile: PlayerProfile; 
             <span className="db-xp-pct">{xpPct}% to Level {level + 1}</span>
             <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>+100 coins on level up</span>
           </div>
+          <div style={{ marginTop: 6, padding: '6px 10px', background: `${rankColor}0d`, border: `1px solid ${rankColor}22`, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>XP needed for Level {level + 1}</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: rankColor }}>{Math.max(0, xpNeeded - xpCurrent).toLocaleString()} XP</span>
+          </div>
         </div>
 
         <div className="db-stats-grid">
@@ -687,7 +691,7 @@ function DailyMissions({ missions, onClaim }: { missions: Mission[]; onClaim: (i
 }
 
 // ─── Power Up Shop ────────────────────────────────────────────────────────────
-function PowerUpShop({ coinBalance, onBuy }: { coinBalance: number; onBuy: (key: 'shield' | 'magnet' | 'multiplier') => void }) {
+function PowerUpShop({ coinBalance, onBuy, shopPurchases }: { coinBalance: number; onBuy: (key: 'shield' | 'magnet' | 'multiplier') => void; shopPurchases?: { shield?: number; magnet?: number; multiplier?: number } }) {
   const SHOP_ITEMS = [
     { key: 'shield' as const, icon: 'Shield' as IconKey, color: '#06b6d4', name: 'Shield', desc: 'Protects you from 1 collision. The shield absorbs the hit so you keep surfing.', cost: SHIELD_COST },
     { key: 'magnet' as const, icon: 'Magnet' as IconKey, color: '#f97316', name: 'Magnet Boost', desc: 'Automatically attracts nearby coins to you for a limited time during a run.', cost: MAGNET_COST },
@@ -723,11 +727,17 @@ function PowerUpShop({ coinBalance, onBuy }: { coinBalance: number; onBuy: (key:
 
       {SHOP_ITEMS.map(item => {
         const canAfford = (coinBalance || 0) >= item.cost;
+        const owned = (shopPurchases?.[item.key] || 0);
         return (
           <div key={item.key} className={`shop-item shop-item-buyable${!canAfford ? ' shop-item-broke' : ''}`}>
-            <div className="shop-item-icon-wrap"><Icon name={item.icon} size={22} color={item.color} /></div>
+            <div className="shop-item-icon-wrap" style={{ position: 'relative' }}>
+              <Icon name={item.icon} size={22} color={item.color} />
+              {owned > 0 && (
+                <span style={{ position: 'absolute', top: -6, right: -6, background: item.color, color: '#020916', fontSize: 10, fontWeight: 800, borderRadius: '50%', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}>{owned}</span>
+              )}
+            </div>
             <div className="shop-item-details">
-              <span className="shop-item-name">{item.name}</span>
+              <span className="shop-item-name">{item.name}{owned > 0 && <span style={{ marginLeft: 6, fontSize: 10, color: item.color, fontWeight: 700, background: `${item.color}18`, border: `1px solid ${item.color}44`, borderRadius: 10, padding: '1px 6px' }}>x{owned} owned</span>}</span>
               <span className="shop-item-desc">{item.desc}</span>
             </div>
             <div className="shop-item-action">
@@ -1070,43 +1080,161 @@ function StartScreen({ onStart, profile, streak }: { onStart: () => void; profil
 function GameOverOverlay({
   finalScore, finalCoins, coinBalance, isNewRecord,
   txLoading, txPhase, txMsg, wallet, lives,
-  postGame, onRestart, onShare, onCopyScore, onSaveOnChain, onConnectWallet, onBuyLife,
+  postGame, onRestart, onShare, onCopyScore, onSaveOnChain, onConnectWallet, onBuyLife, onNotify,
+  bestScore, survivalTime, boxesCollected, activePowerups,
 }: {
   finalScore: number; finalCoins: number; coinBalance: number; isNewRecord: boolean;
   txLoading: boolean; txPhase: TxPhase; txMsg: string | null; wallet: WalletState; lives: number;
   postGame: { xpEarned: number; newLevel: number | null };
   onRestart: () => void; onShare: () => void; onCopyScore: () => void;
   onSaveOnChain: () => void; onConnectWallet: () => void; onBuyLife: () => void;
+  onNotify?: (msg: string, icon: IconKey, color: string) => void;
+  bestScore?: number; survivalTime?: number; boxesCollected?: number;
+  activePowerups?: { shield: boolean; magnet: boolean; shieldCount: number; magnetCount: number; shieldTimer?: number; magnetTimer?: number };
 }) {
   const canAffordLife = (coinBalance || 0) >= EXTRA_LIFE_COST;
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [shareFeedback, setShareFeedback] = useState(false);
+  const [showGoLevelHelp, setShowGoLevelHelp] = useState(false);
+
+  const xpEarned = postGame?.xpEarned || 0;
+  const newLevel = postGame?.newLevel ?? null;
+  const formatTime = (s: number) => s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 
   const handleCopy = () => {
     try { onCopyScore(); } catch {}
     setCopyFeedback(true);
+    onNotify?.('Score copied to clipboard! 📋', 'Copy', '#10b981');
     setTimeout(() => setCopyFeedback(false), 2500);
   };
 
   const handleShare = () => {
     try { onShare(); } catch {}
     setShareFeedback(true);
+    onNotify?.('Score shared successfully! 🚀', 'Share', '#22d3ee');
     setTimeout(() => setShareFeedback(false), 2500);
   };
 
   return (
     <div className="overlay gameover-overlay">
       <div className="gameover-modal">
+        {showGoLevelHelp && <LevelHelpModal onClose={() => setShowGoLevelHelp(false)} />}
         {isNewRecord && <div className="new-record-banner"><Icon name="Trophy" size={12} color="#020916" /> NEW RECORD</div>}
         <div className="go-header"><h2 className="go-title">WIPEOUT!</h2><p className="go-sub">Your run ended. Claim rewards or surf again.</p></div>
-        <PostGameSummary
-          finalScore={finalScore || 0}
-          finalCoins={finalCoins || 0}
-          coinBalance={coinBalance || 0}
-          isNewRecord={isNewRecord}
-          xpEarned={postGame?.xpEarned || 0}
-          newLevel={postGame?.newLevel ?? null}
-        />
+
+        {/* Expanded Run Summary */}
+        <div className="pgs-card" style={{ marginBottom: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderBottom: '1px solid var(--border-2)' }}>
+            <Icon name="Chart" size={16} color="#22d3ee" />
+            <span style={{ fontWeight: 700, color: '#22d3ee', fontSize: 14 }}>Run Summary</span>
+            {isNewRecord && <span className="pgs-new-record">New Record!</span>}
+          </div>
+          <div className="pgs-body">
+            <div className="pgs-score-card">
+              {/* Score */}
+              <div className="pgs-score-row">
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <span className="pgs-score-label">Score</span>
+                  <span style={{ fontSize: 10, color: 'var(--text-secondary)' }}>This run</span>
+                </div>
+                <span className="pgs-score-value" style={{ color: '#22d3ee' }}>{(finalScore || 0).toLocaleString()}</span>
+              </div>
+              <div className="pgs-divider" />
+              {/* Best Score */}
+              <div className="pgs-score-row">
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <span className="pgs-score-label">Best Score</span>
+                  <span style={{ fontSize: 10, color: 'var(--text-secondary)' }}>All time</span>
+                </div>
+                <span className="pgs-score-value" style={{ color: '#a855f7' }}>{(bestScore || 0).toLocaleString()}</span>
+              </div>
+              <div className="pgs-divider" />
+              {/* Coins */}
+              <div className="pgs-score-row">
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <span className="pgs-score-label">Coins Collected</span>
+                  <span style={{ fontSize: 10, color: 'var(--text-secondary)' }}>Added this run</span>
+                </div>
+                <span className="pgs-score-value" style={{ color: '#f59e0b' }}><Icon name="Coin" size={16} color="#f59e0b" /><span>+{finalCoins || 0}</span></span>
+              </div>
+              <div className="pgs-divider" />
+              {/* XP */}
+              <div className="pgs-score-row">
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <span className="pgs-score-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    XP Earned
+                    <button type="button" onClick={() => setShowGoLevelHelp(true)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, lineHeight: 1, display: 'flex', alignItems: 'center' }} title="How do levels work?">
+                      <Icon name="Info" size={12} color="rgba(186,230,253,0.5)" />
+                    </button>
+                  </span>
+                  <span style={{ fontSize: 10, color: 'var(--text-secondary)' }}>Progress toward next level</span>
+                </div>
+                <span className="pgs-score-value" style={{ color: '#38bdf8' }}><Icon name="Xp" size={16} color="#38bdf8" /><span>+{xpEarned}</span></span>
+              </div>
+              {/* Survival Time */}
+              {(survivalTime || 0) > 0 && <>
+                <div className="pgs-divider" />
+                <div className="pgs-score-row">
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <span className="pgs-score-label">Survival Time</span>
+                    <span style={{ fontSize: 10, color: 'var(--text-secondary)' }}>How long you lasted</span>
+                  </div>
+                  <span className="pgs-score-value" style={{ color: '#10b981' }}>{formatTime(survivalTime || 0)}</span>
+                </div>
+              </>}
+              {/* Boxes Collected */}
+              {(boxesCollected || 0) > 0 && <>
+                <div className="pgs-divider" />
+                <div className="pgs-score-row">
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <span className="pgs-score-label">Boxes Collected</span>
+                    <span style={{ fontSize: 10, color: 'var(--text-secondary)' }}>Mystery boxes opened</span>
+                  </div>
+                  <span className="pgs-score-value" style={{ color: '#a855f7' }}><Icon name="Box" size={16} color="#a855f7" /><span>{boxesCollected}</span></span>
+                </div>
+              </>}
+              <div className="pgs-divider" />
+              {/* Current Level */}
+              <div className="pgs-score-row">
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <span className="pgs-score-label">Current Level</span>
+                  <span style={{ fontSize: 10, color: 'var(--text-secondary)' }}>XP progression</span>
+                </div>
+                <span className="pgs-score-value" style={{ color: '#f59e0b' }}><Icon name="Star" size={16} color="#f59e0b" /><span>Lv.{newLevel ?? 1}</span></span>
+              </div>
+            </div>
+            {newLevel !== null && <div className="pgs-level-up"><Icon name="Star" size={18} color="#f59e0b" /><span>Level Up! You are now <strong>Level {newLevel}</strong> · +100 Coins!</span></div>}
+          </div>
+        </div>
+
+        {/* Active Powerups Panel */}
+        {activePowerups && ((activePowerups.shieldCount || 0) > 0 || (activePowerups.magnetCount || 0) > 0) && (
+          <div className="go-card" style={{ marginBottom: 10, background: 'var(--glass-2)', border: '1px solid var(--border-2)' }}>
+            <div className="go-card-header">
+              <div className="go-card-title-row"><Icon name="Bolt" size={16} color="#f59e0b" /><span className="go-card-title">Owned Power-ups</span></div>
+            </div>
+            <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+              {(activePowerups.shieldCount || 0) > 0 && (
+                <div style={{ flex: 1, background: 'rgba(6,182,212,0.1)', border: '1px solid rgba(6,182,212,0.3)', borderRadius: 8, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Icon name="Shield" size={18} color="#06b6d4" />
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#06b6d4' }}>Shield</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>x{activePowerups.shieldCount} owned</div>
+                  </div>
+                </div>
+              )}
+              {(activePowerups.magnetCount || 0) > 0 && (
+                <div style={{ flex: 1, background: 'rgba(249,115,22,0.1)', border: '1px solid rgba(249,115,22,0.3)', borderRadius: 8, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Icon name="Magnet" size={18} color="#f97316" />
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#f97316' }}>Magnet</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>x{activePowerups.magnetCount} owned</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="go-card go-card-life">
           <div className="go-card-header">
@@ -1145,7 +1273,7 @@ function GameOverOverlay({
                 : { background: 'rgba(34,211,238,0.15)', border: '1px solid rgba(34,211,238,0.5)', color: '#22d3ee' }
               }
             >
-              {shareFeedback ? <><Icon name="Check" size={15} color="#10b981" /> Shared on Telegram!</> : <><Icon name="Telegram" size={15} color="currentColor" /> Share on Telegram</>}
+              {shareFeedback ? <><Icon name="Check" size={15} color="#10b981" /> Score Shared! 🎉</> : <><Icon name="Share" size={15} color="currentColor" /> Share Score</>}
             </button>
           </div>
         </div>
@@ -1189,6 +1317,8 @@ function App() {
   const [lives, setLives]             = useState(0);
   const [pgXp, setPgXp]               = useState(0);
   const [pgNewLevel, setPgNewLevel]   = useState<number | null>(null);
+  const [pgSurvivalTime, setPgSurvivalTime] = useState(0);
+  const [pgBoxes, setPgBoxes]         = useState(0);
 
   // Wallet
   const [wallet, setWalletState]     = useState<WalletState>({ address: null, provider: null, signer: null, chainId: null, networkName: null });
@@ -1390,6 +1520,8 @@ function App() {
             setLives(updatedProfile.lives || 0);
             setPgXp(xpEarned);
             setPgNewLevel(leveledUp ? newLevel : null);
+            setPgSurvivalTime(Math.round((engineRef.current as any)?.survivalTime ?? 0));
+            setPgBoxes((engineRef.current as any)?.boxesCollected ?? 0);
 
             // Switch to gameover screen — delayed slightly to ensure all state updates flush
             setTimeout(() => {
@@ -1497,6 +1629,8 @@ function App() {
       setIsNewRecord(false);
       setPgXp(0);
       setPgNewLevel(null);
+      setPgSurvivalTime(0);
+      setPgBoxes(0);
       // Refresh profile in case daily reward was claimed on game over screen
       try { setProfile(getProfile()); } catch {}
       setTimeout(() => {
@@ -1667,18 +1801,22 @@ function App() {
   }, [finalScore]);
 
   const handleShareTelegram = useCallback(() => {
+    let shared = false;
     try {
       shareScore(finalScore || 0);
-    } catch {
-      // Fallback: open a generic Telegram share URL
+      shared = true;
+    } catch {}
+    if (!shared) {
       try {
         const tgUser = getTelegramUser();
         const name   = tgUser?.first_name || tgUser?.username || 'Surfer';
-        const text   = encodeURIComponent(`🏄 ${name} scored ${(finalScore || 0).toLocaleString()} in Surf Rush! 🌊`);
-        window.open(`https://t.me/share/url?url=${encodeURIComponent(window.location.href)}&text=${text}`, '_blank', 'noopener');
+        const text   = encodeURIComponent(`🏄 ${name} scored ${(finalScore || 0).toLocaleString()} in Surf Rush Web3 Edition! 🌊 Can you beat it?`);
+        const shareUrl = typeof window !== 'undefined' ? window.location.href : '';
+        window.open(`https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${text}`, '_blank', 'noopener');
       } catch {}
     }
-  }, [finalScore]);
+    addToast('Score shared! 🚀', 'Share', '#22d3ee');
+  }, [finalScore, addToast]);
 
   const handleToggleSound = useCallback(() => {
     setSoundEnabled(s => {
@@ -1840,6 +1978,11 @@ function App() {
             onSaveOnChain={handleSaveOnChain}
             onConnectWallet={handleConnectWallet}
             onBuyLife={handleBuyLife}
+            onNotify={addToast}
+            bestScore={profile.highScore || 0}
+            survivalTime={pgSurvivalTime}
+            boxesCollected={pgBoxes}
+            activePowerups={{ shield: false, magnet: false, shieldCount: shopPurchases.shield || 0, magnetCount: shopPurchases.magnet || 0 }}
           />
         )}
 
@@ -1848,7 +1991,7 @@ function App() {
           <>
             <PlayerDashboard profile={profile} streak={streak} wallet={wallet} />
             <DailyMissions missions={missions} onClaim={handleClaimMission} />
-            <PowerUpShop coinBalance={coinBalance} onBuy={handleBuyShopItem} />
+            <PowerUpShop coinBalance={coinBalance} onBuy={handleBuyShopItem} shopPurchases={shopPurchases} />
             <BoostInventory shopPurchases={shopPurchases} profile={profile} queuedBoosts={queuedBoosts} onQueue={handleQueueBoost} />
             <WalletInfoSection wallet={wallet} onConnect={handleConnectWallet} onDisconnect={handleDisconnectWallet} />
             <SettingsPanel
