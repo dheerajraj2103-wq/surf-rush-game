@@ -1080,13 +1080,13 @@ function StartScreen({ onStart, profile, streak }: { onStart: () => void; profil
 function GameOverOverlay({
   finalScore, finalCoins, coinBalance, isNewRecord,
   txLoading, txPhase, txMsg, wallet, lives,
-  postGame, onRestart, onShare, onCopyScore, onSaveOnChain, onConnectWallet, onBuyLife, onNotify,
+  postGame, onRestart, onShare, onShareGame, onCopyScore, onSaveOnChain, onConnectWallet, onBuyLife, onNotify,
   bestScore, survivalTime, boxesCollected, activePowerups,
 }: {
   finalScore: number; finalCoins: number; coinBalance: number; isNewRecord: boolean;
   txLoading: boolean; txPhase: TxPhase; txMsg: string | null; wallet: WalletState; lives: number;
   postGame: { xpEarned: number; newLevel: number | null };
-  onRestart: () => void; onShare: () => void; onCopyScore: () => void;
+  onRestart: () => void; onShare: () => void; onShareGame: () => void; onCopyScore: () => void;
   onSaveOnChain: () => void; onConnectWallet: () => void; onBuyLife: () => void;
   onNotify?: (msg: string, icon: IconKey, color: string) => void;
   bestScore?: number; survivalTime?: number; boxesCollected?: number;
@@ -1095,6 +1095,8 @@ function GameOverOverlay({
   const canAffordLife = (coinBalance || 0) >= EXTRA_LIFE_COST;
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [shareFeedback, setShareFeedback] = useState(false);
+  const [shareGameFeedback, setShareGameFeedback] = useState(false);
+  const [shareGameHover, setShareGameHover] = useState(false);
   const [showGoLevelHelp, setShowGoLevelHelp] = useState(false);
 
   const xpEarned = postGame?.xpEarned || 0;
@@ -1113,6 +1115,13 @@ function GameOverOverlay({
     setShareFeedback(true);
     onNotify?.('Score shared successfully! 🚀', 'Share', '#22d3ee');
     setTimeout(() => setShareFeedback(false), 2500);
+  };
+
+  const handleShareGameClick = () => {
+    try { onShareGame(); } catch {}
+    setShareGameFeedback(true);
+    onNotify?.('Game shared successfully! 🚀', 'Telegram', '#22d3ee');
+    setTimeout(() => setShareGameFeedback(false), 2500);
   };
 
   return (
@@ -1274,6 +1283,27 @@ function GameOverOverlay({
               }
             >
               {shareFeedback ? <><Icon name="Check" size={15} color="#10b981" /> Score Shared! 🎉</> : <><Icon name="Share" size={15} color="currentColor" /> Share Score</>}
+            </button>
+            <button
+              className="go-btn go-btn-share-game"
+              onClick={handleShareGameClick}
+              onMouseEnter={() => setShareGameHover(true)}
+              onMouseLeave={() => setShareGameHover(false)}
+              type="button"
+              aria-label="Share Surf Rush on Telegram"
+              style={{
+                background: shareGameFeedback ? 'rgba(16,185,129,0.2)' : 'rgba(34,158,217,0.15)',
+                border: shareGameFeedback ? '1px solid #10b981' : '1px solid rgba(34,158,217,0.5)',
+                color: shareGameFeedback ? '#10b981' : '#29a9eb',
+                transform: shareGameHover && !shareGameFeedback ? 'translateY(-2px) scale(1.015)' : 'translateY(0) scale(1)',
+                boxShadow: shareGameHover && !shareGameFeedback ? '0 6px 16px rgba(41,169,235,0.35)' : 'none',
+                transition: 'transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease, border-color 0.18s ease, color 0.18s ease',
+              }}
+            >
+              {shareGameFeedback
+                ? <><Icon name="Check" size={15} color="#10b981" /> Game Shared! 🎉</>
+                : <><Icon name="Telegram" size={15} color="currentColor" /> 🚀 Share Game</>
+              }
             </button>
           </div>
         </div>
@@ -1818,6 +1848,42 @@ function App() {
     addToast('Score shared! 🚀', 'Share', '#22d3ee');
   }, [finalScore, addToast]);
 
+  const handleShareGame = useCallback(() => {
+    const gameUrl = 'https://surf-rush-game.vercel.app/';
+    const text = `Check out Surf Rush! Play now: ${gameUrl}`;
+    const tgShareLink = `https://t.me/share/url?url=${encodeURIComponent(gameUrl)}&text=${encodeURIComponent('Check out Surf Rush! Play now:')}`;
+    let shared = false;
+    try {
+      // Use Telegram Mini App's native link opener when running inside Telegram
+      const tg = (typeof window !== 'undefined' ? (window as any).Telegram?.WebApp : null);
+      if (tg?.openTelegramLink) {
+        tg.openTelegramLink(tgShareLink);
+        shared = true;
+      }
+    } catch {}
+    if (!shared) {
+      try {
+        window.open(tgShareLink, '_blank', 'noopener');
+        shared = true;
+      } catch {}
+    }
+    if (!shared) {
+      // Last-resort fallback so the action never silently fails
+      try {
+        if (navigator.share) {
+          navigator.share({ title: 'Surf Rush', text, url: gameUrl }).catch(() => {});
+          shared = true;
+        }
+      } catch {}
+    }
+    if (!shared) {
+      try {
+        if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).catch(() => {});
+      } catch {}
+    }
+    addToast('Game link shared! 🚀', 'Telegram', '#22d3ee');
+  }, [addToast]);
+
   const handleToggleSound = useCallback(() => {
     setSoundEnabled(s => {
       const next = !s;
@@ -1974,6 +2040,7 @@ function App() {
             postGame={{ xpEarned: pgXp, newLevel: pgNewLevel }}
             onRestart={handleRestart}
             onShare={handleShareTelegram}
+            onShareGame={handleShareGame}
             onCopyScore={handleCopyScore}
             onSaveOnChain={handleSaveOnChain}
             onConnectWallet={handleConnectWallet}
